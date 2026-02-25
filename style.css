@@ -1041,3 +1041,78 @@ body {
   border-color: var(--purple);
   background: rgba(124, 58, 237, 0.2);
 }
+
+/* ─── SEO & Guide Section ─── */
+.seo-section {
+  max-width: 900px;
+  margin: 4rem auto 2rem;
+  padding: 0 clamp(1rem, 5vw, 2rem);
+  color: var(--text-sub);
+  line-height: 1.7;
+}
+
+.seo-section h2 {
+  color: var(--text);
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  font-weight: 700;
+}
+
+.seo-section h3 {
+  color: var(--text);
+  font-size: 1.2rem;
+  margin: 1.5rem 0 1rem;
+}
+
+.seo-section p {
+  margin-bottom: 1rem;
+}
+
+.seo-section ol {
+  margin-left: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.seo-section li {
+  margin-bottom: 0.5rem;
+}
+
+.seo-section strong {
+  color: var(--cyan);
+}
+
+.guide-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 2rem 0 1rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.guide-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: var(--radius-sm);
+}
+
+.guide-tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-sub);
+}
+
+.guide-tab.active {
+  background: rgba(124, 58, 237, 0.15);
+  color: var(--purple);
+  border: 1px solid rgba(124, 58, 237, 0.3);
+}
+
+.guide-content {
+  animation: slideUp 0.3s ease;
+}

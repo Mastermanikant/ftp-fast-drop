@@ -626,6 +626,23 @@ $('btnScanQR').addEventListener('click', openQRScanner);
 $('btnCloseScan').addEventListener('click', closeQRScanner);
 
 // ─────────────────────────────────────────────────────────────
+// How to Use Translation Tabs
+// ─────────────────────────────────────────────────────────────
+$('tab-en').addEventListener('click', () => {
+    $('tab-en').classList.add('active');
+    $('tab-hi').classList.remove('active');
+    $('guide-en').classList.remove('hidden');
+    $('guide-hi').classList.add('hidden');
+});
+
+$('tab-hi').addEventListener('click', () => {
+    $('tab-hi').classList.add('active');
+    $('tab-en').classList.remove('active');
+    $('guide-hi').classList.remove('hidden');
+    $('guide-en').classList.add('hidden');
+});
+
+// ─────────────────────────────────────────────────────────────
 // Startup — SW Registration + PWA Install + Trystero Preload
 // ─────────────────────────────────────────────────────────────
 let deferredInstallPrompt = null;
