@@ -57,24 +57,67 @@ To make users stay, FastDrop must become a "Habit".
 
 ---
 
-## 5. Monetization: Premium Plans (No Free Trial)
+## 5. Monetization: Data-Based & Hybrid Pricing (No Free Trial)
 
-Since we are offering a premium infrastructure (VPS TURN Relay) for long-distance, high-speed transfers without any limits, we will implement micropayments.
+You are absolutely right: selling a "1-Day Pass" without data limits is dangerous. A user could buy a ₹19 pass and transfer 500GB, costing you ₹10 in server bandwidth and wiping out your profit margin.
 
-**The Golden Rule:** The local Wi-Fi transfer remains 100% FREE forever (it costs us nothing). Premium is ONLY for Long-Distance (e.g., sending a 50GB 4K video shoot from Delhi to Mumbai instantly).
+**The Golden Rule:** The local Wi-Fi transfer remains 100% FREE forever (it costs us nothing). Premium is ONLY for Long-Distance TURN networking.
 
-### Recommended Pricing Structure (India)
+### The Solution: Data-Cap Hybrid Pricing
 
-We use Razorpay/UPI for instant micropayments. Skip monthly subscriptions initially, as Indians prefer "Pay as you go" or "Sachet Pricing".
+Instead of pure time, we sell **Data Packs with Validity**. This guarantees that you *always* make a profit on every transfer.
 
-* **1-Day Pass (₹9 or ₹19):**
-  * Target: Freelancer who needs to send one urgent project file to a client today.
-  * Features: 24 Hours of Unlimited High-Speed Long Distance (TURN Relay). Ad-Free. Password protection.
-* **7-Day Pass (₹49):**
-  * Target: A video editor working on a week-long project with a remote team.
-  * Features: Ad-Free, Global High-Speed, Custom Room Codes.
-* **30-Day Pass (₹149):**
-  * Target: Professionals, Photographers, Studios.
-  * Features: VIP Support, Dedicated bandwidth lane.
+#### Pricing Tier 1: India (Price Sensitive, Volume Driven)
 
-*Note on "No Free Trial":* You do not need a free trial for the premium VPS routing because the Local Wi-Fi transfer *is* the free trial. They already know the UI is fast and beautiful. They are paying solely for the long-distance networking feature.
+We use Razorpay/UPI for instant micropayments.
+
+* **Mini Drop (₹19):**
+  * Allowance: 10 GB Data Transfer
+  * Validity: 24 Hours
+  * *Your Cost:* ~₹0.20 | *Profit:* ₹18.80
+* **Pro Drop (₹49):**
+  * Allowance: 50 GB Data Transfer
+  * Validity: 7 Days
+  * *Your Cost:* ~₹1.00 | *Profit:* ₹48.00
+* **Studio Drop (₹149):**
+  * Allowance: 200 GB Data Transfer
+  * Validity: 30 Days
+  * *Your Cost:* ~₹4.00 | *Profit:* ₹145.00
+
+#### Pricing Tier 2: Global / US/UK (High Purchasing Power)
+
+Using Stripe, you can geographically set prices higher for Western countries. What is ₹49 in India is easily $3.00 in the US.
+
+* **Mini Drop ($1.99):** 10 GB for 24 Hours.
+* **Pro Drop ($4.99):** 50 GB for 7 Days.
+* **Studio Drop ($14.99):** 200 GB for 30 Days.
+* *Note:* The system automatically detects the user's IP (India vs. Global) and displays the appropriate currency (₹ vs $).
+
+---
+
+## 6. Should We Offer 24-Hour "Upload & Store" Functionality?
+
+Right now, FastDrop is **Synchronous** (Sender and Receiver must be online at the exact same time).
+You asked if we should let a user upload a file to the server, and the receiver downloads it within 24 hours (like WeTransfer).
+
+### The "Store & Forward" Feature (Asynchronous Transfer)
+
+Yes, you *should* absolutely offer this, but **only as a high-tier Premium feature**.
+
+**Why it is a Game-Changer:**
+
+* **Timezones:** If a US client is sleeping, an Indian freelancer cannot use P2P. They *must* be able to upload to a server temporarily.
+* **Convenience:** People don't always want to keep their PC screen on waiting for the other person to accept the transfer.
+
+**The Costs & How to Handle It:**
+Unlike P2P (where we only pay for bandwidth), this feature requires **Cloud Storage (Hard Disks)**.
+
+* Providing 24-hour storage means renting Amazon S3 or Cloudflare R2 storage bins.
+* Cloudflare R2 is the cheapest: $0.015 per GB stored.
+* If a user uploads a 10GB file and it sits there for 24 hours, it costs you almost nothing in storage, but the bandwidth to upload and download costs money.
+
+**How to Implement It Safely:**
+
+1. **Never Free:** The 24-hour upload feature should NEVER be free. It should be locked behind the "Pro Drop" or "Studio Drop" plans.
+2. **Auto-Delete (Crucial):** Write a strict server-side script (a Cron Job) that automatically permanently deletes files exactly 24 hours after upload. This ensures your server hard drive never gets full and your AWS/Cloudflare bill stays near zero.
+3. **Data Caps Apply:** If a user buys the 50GB plan, uploading a 10GB file to the server and the receiver downloading it counts against their 50GB premium limit.
