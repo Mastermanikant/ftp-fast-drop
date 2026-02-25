@@ -19,6 +19,13 @@ const APP_ID = 'fastdrop-v1';
 const CHUNK_SIZE = 256 * 1024;  // 256 KB
 const UI_THROTTLE_MS = 120;     // max UI update rate per transfer
 
+// Preloaded module — loaded on startup so first click is instant (fixes INP 319ms)
+let trysteroModule = null;
+async function preloadTrystero() {
+    try { trysteroModule = await import('https://esm.sh/trystero/nostr'); }
+    catch (e) { console.warn('Trystero preload failed, will retry on connect:', e); }
+}
+
 // ─────────────────────────────────────────────────────────────
 // RoomManager
 // ─────────────────────────────────────────────────────────────
@@ -228,7 +235,9 @@ async function joinRoom(code) {
     setStatus('connecting');
     toast('Connecting via Nostr relay…', 'info');
 
-    const { joinRoom: trysteroJoin } = await import('https://esm.sh/trystero/nostr');
+    // Use preloaded module — avoids INP block on first click
+    if (!trysteroModule) trysteroModule = await import('https://esm.sh/trystero/nostr');
+    const { joinRoom: trysteroJoin } = trysteroModule;
 
     trysteroRoom = trysteroJoin({ appId: APP_ID }, code);
 
@@ -254,13 +263,9 @@ async function joinRoom(code) {
     trysteroRoom.onPeerLeave(() => {
         isConnected = false;
         setStatus('reconnecting');
-        // ── Grace period: relay blips don't immediately reset ──
-        // If peer rejoins within 10s, everything continues normally
-        toast('Peer signal lost — waiting 10s before reset…', 'warn');
-        disconnectTimer = setTimeout(() => {
-            toast('Peer disconnected.', 'error');
-            resetToLobby();
-        }, 10000);
+        // No auto-reset — handles background tab, phone lock screen, brief relay blip.
+        // User must manually tap Disconnect. Peer rejoining will resume normally.
+        toast('Peer signal lost — waiting to reconnect…', 'warn');
     });
 }
 
@@ -338,7 +343,6 @@ function showTransferScreen() {
 }
 
 function resetToLobby() {
-    if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
     trysteroRoom?.leave?.();
     trysteroRoom = null; fileEngine = null;
     fileQueue = []; transfers = {}; isConnected = false;
@@ -565,12 +569,102 @@ document.addEventListener('paste', e => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Auto-join from URL (?room=XXXXXX)
+// QR Scanner — join by scanning QR with camera
 // ─────────────────────────────────────────────────────────────
+let scanStream = null;
+let scanAnimFrame = null;
+
+function openQRScanner() {
+    $('qrScannerModal').classList.remove('hidden');
+    const video = $('qrVideo');
+    const canvas = $('qrCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const status = $('qrScanStatus');
+    status.textContent = 'Starting camera…';
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(stream => {
+            scanStream = stream;
+            video.srcObject = stream;
+            video.play();
+            status.textContent = 'Point camera at the QR code…';
+
+            function tick() {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0);
+                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imgData.data, imgData.width, imgData.height,
+                        { inversionAttempts: 'dontInvert' });
+                    if (code) {
+                        const match = code.data.match(/[?&]room=(\d{6})/);
+                        if (match) {
+                            closeQRScanner();
+                            $('roomCodeInput').value = match[1];
+                            doJoin();
+                            return;
+                        }
+                    }
+                }
+                scanAnimFrame = requestAnimationFrame(tick);
+            }
+            scanAnimFrame = requestAnimationFrame(tick);
+        })
+        .catch(() => {
+            status.textContent = '❌ Camera access denied. Please allow camera and try again.';
+        });
+}
+
+function closeQRScanner() {
+    $('qrScannerModal').classList.add('hidden');
+    if (scanAnimFrame) { cancelAnimationFrame(scanAnimFrame); scanAnimFrame = null; }
+    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+}
+
+$('btnScanQR').addEventListener('click', openQRScanner);
+$('btnCloseScan').addEventListener('click', closeQRScanner);
+
+// ─────────────────────────────────────────────────────────────
+// Startup — SW Registration + PWA Install + Trystero Preload
+// ─────────────────────────────────────────────────────────────
+let deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    $('btnInstall').classList.remove('hidden');
+});
+
+$('btnInstall').addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') {
+        $('btnInstall').classList.add('hidden');
+        deferredInstallPrompt = null;
+    }
+});
+
+window.addEventListener('appinstalled', () => {
+    $('btnInstall').classList.add('hidden');
+    toast('FastDrop installed!', 'success');
+});
+
 window.addEventListener('DOMContentLoaded', () => {
+    // Register service worker (enables PWA install + offline cache)
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => { });
+    }
+
+    // Preload Trystero so first click is instant (fixes INP 319ms)
+    preloadTrystero();
+
+    // Auto-join if URL has ?room=XXXXXX (QR scan lands here)
     const urlRoom = RoomManager.fromUrl();
     if (urlRoom && /^\d{6}$/.test(urlRoom)) {
         $('roomCodeInput').value = urlRoom;
         doJoin();
     }
 });
+
