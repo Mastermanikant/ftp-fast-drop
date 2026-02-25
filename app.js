@@ -1,39 +1,28 @@
 /**
- * FastDrop — P2P File Transfer
- * Signaling: Trystero (free Nostr relays)
- * Transfer:  WebRTC RTCDataChannel — 256 KB chunks
- * Cost:      $0 — no accounts, no servers
- *
- * FIXES in this version:
- *  1. Peer disconnect grace period (10s before resetting — handles relay blips)
- *  2. Speed display: throttled UI updates so % and MB/s always show
- *  3. Folder upload support (webkitdirectory)
- *  4. ETA shown during transfer
- *  5. QR code = auto-join when scanned
- *  6. Multiple file queue with remove-individual support
- *  7. Clipboard paste (Ctrl+V image/file support)
- *  8. Transfer history preserved after done
+ * FastDrop — P2P File Transfer (Clean Build)
+ * Signaling: Trystero (Nostr relays)
+ * Transfer:  WebRTC RTCDataChannel — 256 KB chunks, streamed
  */
 
 const APP_ID = 'fastdrop-v1';
-const CHUNK_SIZE = 256 * 1024;  // 256 KB
-const UI_THROTTLE_MS = 120;     // max UI update rate per transfer
+const CHUNK_SIZE = 256 * 1024;  // 256 KB per chunk
+const UI_HZ = 100;              // ms between UI repaints
 
-// Preloaded module — loaded on startup so first click is instant (fixes INP 319ms)
 let trysteroModule = null;
 async function preloadTrystero() {
     try { trysteroModule = await import('https://esm.sh/trystero/nostr'); }
-    catch (e) { console.warn('Trystero preload failed, will retry on connect:', e); }
+    catch (e) { console.warn('Trystero preload failed:', e); }
 }
+preloadTrystero();
 
 // ─────────────────────────────────────────────────────────────
 // RoomManager
 // ─────────────────────────────────────────────────────────────
 class RoomManager {
     static generate() {
-        const arr = new Uint32Array(1);
-        crypto.getRandomValues(arr);
-        return String(arr[0] % 900000 + 100000);
+        const a = new Uint32Array(1);
+        crypto.getRandomValues(a);
+        return String(a[0] % 900000 + 100000);
     }
     static fromUrl() {
         return new URLSearchParams(location.search).get('room');
@@ -49,63 +38,52 @@ class FileTransferEngine {
         this._sendMeta = sendMeta;
         this.onProgress = onProgress;
         this._incoming = {};
-        this._lastUI = {};   // throttle: last UI update time per transferId
+        this._lastUI = {};
     }
 
-    _throttledProgress(id, info) {
+    _ui(id, info) {
         const now = Date.now();
-        if (!info.done && (now - (this._lastUI[id] || 0)) < UI_THROTTLE_MS) return;
+        if (!info.done && (now - (this._lastUI[id] || 0)) < UI_HZ) return;
         this._lastUI[id] = now;
         this.onProgress(id, info);
     }
 
-    // ── SEND ──────────────────────────────────────────────────
+    // ── SEND ─────────────────────────────────────────────────
     async sendFile(file, transferId) {
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-        this._sendMeta({
-            type: 'meta', id: transferId,
-            name: file.name, size: file.size,
-            totalChunks,
-        });
+        this._sendMeta({ type: 'meta', id: transferId, name: file.name, size: file.size, totalChunks });
 
-        const buffer = await file.arrayBuffer();
         let sent = 0;
         const startTime = Date.now();
 
         for (let i = 0; i < totalChunks; i++) {
-            const slice = buffer.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+            // Stream each chunk — NO full file.arrayBuffer() — avoids 600ms INP block
+            const slice = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+            const buffer = await slice.arrayBuffer();
 
-            // 12-byte header: [chunkIndex(4)] + [transferId(8)]
-            const header = new Uint8Array(12);
-            new DataView(header.buffer).setUint32(0, i);
-            for (let c = 0; c < 8; c++) header[4 + c] = transferId.charCodeAt(c) || 0;
+            // 12-byte header: [chunkIndex u32 (4)] + [transferId chars (8)]
+            const pkt = new Uint8Array(12 + buffer.byteLength);
+            const view = new DataView(pkt.buffer);
+            view.setUint32(0, i);
+            for (let c = 0; c < 8; c++) pkt[4 + c] = transferId.charCodeAt(c) || 0;
+            pkt.set(new Uint8Array(buffer), 12);
 
-            const chunk = new Uint8Array(header.byteLength + slice.byteLength);
-            chunk.set(header, 0);
-            chunk.set(new Uint8Array(slice), header.byteLength);
+            this._sendBinary(pkt.buffer);
+            sent += buffer.byteLength;
 
-            this._sendBinary(chunk.buffer);
-
-            sent += slice.byteLength;
             const elapsed = (Date.now() - startTime) / 1000 || 0.001;
             const speed = sent / elapsed;
-            const remaining = (file.size - sent) / (speed || 1);
 
-            this._throttledProgress(transferId, {
+            this._ui(transferId, {
                 pct: Math.round((i + 1) / totalChunks * 100),
                 speed, sent, total: file.size,
-                eta: remaining, done: false,
-                name: file.name, direction: 'send',
+                eta: (file.size - sent) / speed,
+                done: false, name: file.name, direction: 'send',
             });
 
-            // Smart buffer yield: Prevent WebRTC silent drop
-            if (i % 32 === 0) {
-                // We use setTimeout to yield to the event loop. In a robust setup,
-                // you would check `dataChannel.bufferedAmount`. Since we use Trystero's wrapper,
-                // we aggressively yield to give the browser time to empty its UDP queue.
-                await new Promise(r => setTimeout(r, 2));
-            }
+            // Yield every 16 chunks so browser can paint
+            if (i % 16 === 0) await new Promise(r => setTimeout(r, 0));
         }
 
         this._sendMeta({ type: 'done', id: transferId });
@@ -116,9 +94,10 @@ class FileTransferEngine {
         });
     }
 
-    // ── RECEIVE binary chunk ───────────────────────────────────
+    // ── RECEIVE binary ────────────────────────────────────────
     onReceiveBinary(data) {
         if (!(data instanceof ArrayBuffer)) return;
+
         const view = new DataView(data);
         const index = view.getUint32(0);
         const idArr = new Uint8Array(data, 4, 8);
@@ -128,56 +107,63 @@ class FileTransferEngine {
         const st = this._incoming[id];
         if (!st) return;
 
-        st.chunks[index] = chunk;
-        st.received += chunk.byteLength;
+        // Store chunk & track count (not bytes — safer for race conditions)
+        if (st.chunks[index] === undefined) {
+            st.chunks[index] = chunk;
+            st.received++;
+            st.bytes += chunk.byteLength;
+        }
 
         const elapsed = (Date.now() - st.startTime) / 1000 || 0.001;
-        const speed = st.received / elapsed;
-        const remaining = (st.meta.size - st.received) / (speed || 1);
+        const speed = st.bytes / elapsed;
 
-        this._throttledProgress(id, {
-            pct: Math.round((st.received / st.meta.size) * 100),
-            speed, sent: st.received, total: st.meta.size,
-            eta: remaining, done: false,
-            name: st.meta.name, direction: 'recv',
+        this._ui(id, {
+            pct: Math.round(st.received / st.meta.totalChunks * 100),
+            speed, sent: st.bytes, total: st.meta.size,
+            eta: (st.meta.size - st.bytes) / speed,
+            done: false, name: st.meta.name, direction: 'recv',
         });
 
-        // Trigger assembly ONLY when exactly 100% of chunks are received
-        if (st.received >= st.meta.size && !st.assembled) {
+        // Assembly triggered exactly when chunk count matches — no race
+        if (st.received === st.meta.totalChunks && !st.assembled) {
             st.assembled = true;
-            this._assembleAndDownload(id, st);
+            this._finalize(id, st);
         }
     }
 
-    _assembleAndDownload(id, st) {
-        // Reassemble — filter out any undefined slots (safety)
+    _finalize(id, st) {
         const parts = st.chunks.map(c => c ? new Uint8Array(c) : new Uint8Array(0));
         const blob = new Blob(parts);
         const url = URL.createObjectURL(blob);
 
-        // Generate implicit download but keep url alive for UI fallback link
+        // Auto-download
         const a = document.createElement('a');
-        a.href = url; a.download = st.meta.name;
-        document.body.appendChild(a); a.click();
-        setTimeout(() => { document.body.removeChild(a); }, 100);
+        a.href = url;
+        a.download = st.meta.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
-        // Notify Sender that file was successfully completely downloaded
+        // Ping sender
         this._sendMeta({ type: 'downloaded', id });
 
         this.onProgress(id, {
             pct: 100, speed: 0, sent: st.meta.size,
             total: st.meta.size, done: true,
-            name: st.meta.name, direction: 'recv', url: url
+            name: st.meta.name, direction: 'recv', url,
         });
         delete this._incoming[id];
     }
 
-    // ── RECEIVE meta / done ────────────────────────────────────
+    // ── RECEIVE meta ──────────────────────────────────────────
     onReceiveMeta(msg) {
         if (msg.type === 'meta') {
             this._incoming[msg.id] = {
-                meta: msg, chunks: new Array(msg.totalChunks),
-                received: 0, startTime: Date.now(),
+                meta: msg,
+                chunks: new Array(msg.totalChunks),
+                received: 0, bytes: 0,
+                startTime: Date.now(),
+                assembled: false,
             };
             this.onProgress(msg.id, {
                 pct: 0, speed: 0, sent: 0, total: msg.size, eta: 0,
@@ -186,15 +172,19 @@ class FileTransferEngine {
         }
 
         if (msg.type === 'done') {
-            // Signal received, but we rely on exact byte count for safety now.
-            // Some poor networks drop the 'done' packet completely anyway.
+            // Fallback: If chunk count matched but 'done' arrives late, safe to ignore.
+            // If chunks haven't arrived yet, wait — _finalize fires from onReceiveBinary.
+            const st = this._incoming[msg.id];
+            if (st && !st.assembled && st.received === st.meta.totalChunks) {
+                st.assembled = true;
+                this._finalize(msg.id, st);
+            }
         }
 
         if (msg.type === 'downloaded') {
-            // Fired on the sender side when receiver finishes download
-            const spdEl = document.getElementById('spd-' + msg.id);
-            if (spdEl) spdEl.textContent = '✓ Receiver Saved';
-            toast('Peer saved file: ' + (transfers[msg.id]?.name || ''), 'success');
+            const el = document.getElementById('spd-' + msg.id);
+            if (el) el.textContent = '✓ Receiver Saved';
+            toast('✓ Peer saved: ' + (transfers[msg.id]?.name || 'file'), 'success');
         }
     }
 }
@@ -204,7 +194,7 @@ class FileTransferEngine {
 // ─────────────────────────────────────────────────────────────
 let trysteroRoom = null;
 let fileEngine = null;
-let fileQueue = [];    // Array of File objects
+let fileQueue = [];
 let transfers = {};
 let isConnected = false;
 
@@ -259,7 +249,6 @@ async function joinRoom(code) {
     setStatus('connecting');
     toast('Connecting via Nostr relay…', 'info');
 
-    // Use preloaded module — avoids INP block on first click
     if (!trysteroModule) trysteroModule = await import('https://esm.sh/trystero/nostr');
     const { joinRoom: trysteroJoin } = trysteroModule;
 
@@ -285,14 +274,12 @@ async function joinRoom(code) {
     trysteroRoom.onPeerLeave(() => {
         isConnected = false;
         setStatus('reconnecting');
-        // No auto-reset — handles background tab, phone lock screen, brief relay blip.
-        // User must manually tap Disconnect. Peer rejoining will resume normally.
         toast('Peer signal lost — waiting to reconnect…', 'warn');
     });
 }
 
 // ─────────────────────────────────────────────────────────────
-// Progress
+// Progress / UI
 // ─────────────────────────────────────────────────────────────
 function handleProgress(id, info) {
     if (!transfers[id]) {
@@ -313,7 +300,7 @@ function renderTransferItem(id, info) {
     const dirLabel = dir === 'recv' ? '↓ Receiving' : '↑ Sending';
     li.innerHTML = `
     <div class="transfer-item-header">
-      <span class="transfer-name" title="${info.name || ''}">${info.name || ('File #' + id.slice(0, 4))}</span>
+      <span class="transfer-name" id="tn-${id}" title="${info.name || ''}">${info.name || ('File #' + id.slice(0, 4))}</span>
       <span class="transfer-direction ${dir}">${dirLabel}</span>
     </div>
     <div class="transfer-bar-bg">
@@ -342,17 +329,15 @@ function updateTransferItem(id, info) {
         spd.textContent = fmtBytes(info.total) + (info.direction === 'recv' ? ' — Saved ✓' : ' — Sent ✓');
         eta.textContent = '';
         item.classList.add('done');
-        transfers[id] = { ...transfers[id], done: true };
+        transfers[id] = { ...transfers[id], ...info, done: true };
 
         if (info.direction === 'recv' && info.url) {
-            // Provide manual download button as fallback/permanent link
-            const titleEl = item.querySelector('.transfer-name');
-            titleEl.innerHTML = `<a href="${info.url}" download="${info.name}" style="color:var(--accent);text-decoration:underline;">${info.name} (Click to Save Again)</a>`;
+            const nameEl = $('tn-' + id);
+            if (nameEl) {
+                nameEl.innerHTML = `<a href="${info.url}" download="${info.name}" style="color:var(--accent);text-decoration:underline;">${info.name} ↓ Save Again</a>`;
+            }
         }
-
-        const msg = info.direction === 'recv'
-            ? `✓ Received: ${info.name}`
-            : `✓ Sent: ${info.name}`;
+        const msg = info.direction === 'recv' ? `✓ Received: ${info.name}` : `✓ Sent: ${info.name}`;
         toast(msg, 'success');
     } else {
         spd.textContent = fmtSpeed(info.speed);
@@ -389,27 +374,21 @@ function resetToLobby() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// File Queue — supports files + folders
+// File Queue
 // ─────────────────────────────────────────────────────────────
 function addFilesToQueue(files) {
     for (const f of files) {
-        // Skip hidden OS files
         if (f.name.startsWith('.') || f.size === 0) continue;
         const key = f.name + '_' + f.size;
-        if (!fileQueue.find(q => q.name + '_' + q.size === key)) {
-            fileQueue.push(f);
-        }
+        if (!fileQueue.find(q => q.name + '_' + q.size === key)) fileQueue.push(f);
     }
     renderQueue();
 }
 
 function removeFromQueue(index) {
     fileQueue.splice(index, 1);
-    if (fileQueue.length === 0) {
-        $('fileQueue').classList.add('hidden');
-    } else {
-        renderQueue();
-    }
+    if (fileQueue.length === 0) $('fileQueue').classList.add('hidden');
+    else renderQueue();
 }
 
 function renderQueue() {
@@ -428,12 +407,10 @@ function renderQueue() {
         $('queueList').appendChild(li);
     });
     const count = fileQueue.length;
-    $('queueCount').textContent =
-        count + (count === 1 ? ' file' : ' files') + ' — ' + fmtBytes(totalSize) + ' total';
+    $('queueCount').textContent = count + (count === 1 ? ' file' : ' files') + ' — ' + fmtBytes(totalSize) + ' total';
     $('fileQueue').classList.remove('hidden');
 }
 
-// Event delegation for remove buttons
 $('queueList').addEventListener('click', e => {
     const btn = e.target.closest('.btn-remove-queue');
     if (btn) removeFromQueue(Number(btn.dataset.idx));
@@ -513,8 +490,6 @@ dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classL
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
 dropZone.addEventListener('drop', e => {
     e.preventDefault(); dropZone.classList.remove('drag-over');
-
-    // Handle both files and folder drops
     const items = [...(e.dataTransfer.items || [])];
     if (items.length && items[0].webkitGetAsEntry) {
         const allFiles = [];
@@ -523,8 +498,7 @@ dropZone.addEventListener('drop', e => {
             const entry = item.webkitGetAsEntry();
             if (!entry) { pending--; return; }
             readEntry(entry, allFiles, () => {
-                pending--;
-                if (pending === 0) addFilesToQueue(allFiles);
+                if (--pending === 0) addFilesToQueue(allFiles);
             });
         });
     } else {
@@ -546,22 +520,14 @@ function readEntry(entry, out, done) {
     } else { done(); }
 }
 
-fileInput.addEventListener('change', () => {
-    addFilesToQueue([...fileInput.files]);
-    fileInput.value = '';
-});
-folderInput.addEventListener('change', () => {
-    addFilesToQueue([...folderInput.files]);
-    folderInput.value = '';
-});
+fileInput.addEventListener('change', () => { addFilesToQueue([...fileInput.files]); fileInput.value = ''; });
+folderInput.addEventListener('change', () => { addFilesToQueue([...folderInput.files]); folderInput.value = ''; });
 
 // Folder button
-$('btnFolder').addEventListener('click', () => folderInput.click());
+$('btnFolder').addEventListener('click', e => { e.stopPropagation(); folderInput.click(); });
 
 // Clear Queue
-$('btnClearQueue').addEventListener('click', () => {
-    fileQueue = []; $('fileQueue').classList.add('hidden');
-});
+$('btnClearQueue').addEventListener('click', () => { fileQueue = []; $('fileQueue').classList.add('hidden'); });
 
 // Send Files
 $('btnSend').addEventListener('click', async () => {
@@ -579,18 +545,16 @@ $('btnSend').addEventListener('click', async () => {
         transfers[id] = { id, name: file.name, direction: 'send', done: false };
         $('noTransfers').classList.add('hidden');
         renderTransferItem(id, { name: file.name, direction: 'send', pct: 0 });
-        // Send sequentially — wait for each before starting next
         await fileEngine.sendFile(file, id).catch(e => {
             toast('Error sending ' + file.name, 'error'); console.error(e);
         });
     }
 });
 
-// ── Clipboard Paste (Ctrl+V) ──────────────────────────────
+// Clipboard Paste (Ctrl+V)
 document.addEventListener('paste', e => {
     if (!isConnected) return;
-    const items = [...(e.clipboardData?.items || [])];
-    const files = items
+    const files = [...(e.clipboardData?.items || [])]
         .filter(i => i.kind === 'file')
         .map(i => i.getAsFile())
         .filter(Boolean);
@@ -598,7 +562,7 @@ document.addEventListener('paste', e => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// QR Scanner — join by scanning QR with camera
+// QR Scanner
 // ─────────────────────────────────────────────────────────────
 let scanStream = null;
 let scanAnimFrame = null;
@@ -624,128 +588,53 @@ function openQRScanner() {
                     canvas.height = video.videoHeight;
                     ctx.drawImage(video, 0, 0);
                     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    const code = jsQR(imgData.data, imgData.width, imgData.height,
-                        { inversionAttempts: 'dontInvert' });
+                    const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
                     if (code) {
                         const match = code.data.match(/[?&]room=(\d{6})/);
                         if (match) {
                             closeQRScanner();
                             $('roomCodeInput').value = match[1];
                             doJoin();
-                            return;
                         }
                     }
                 }
                 scanAnimFrame = requestAnimationFrame(tick);
             }
-            scanAnimFrame = requestAnimationFrame(tick);
+            tick();
         })
-        .catch(() => {
-            status.textContent = '❌ Camera access denied. Please allow camera and try again.';
-        });
+        .catch(() => { status.textContent = 'Camera access denied.'; });
 }
 
 function closeQRScanner() {
-    $('qrScannerModal').classList.add('hidden');
-    if (scanAnimFrame) { cancelAnimationFrame(scanAnimFrame); scanAnimFrame = null; }
+    cancelAnimationFrame(scanAnimFrame);
     if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+    $('qrScannerModal').classList.add('hidden');
 }
 
-$('btnScanQR').addEventListener('click', openQRScanner);
-$('btnCloseScan').addEventListener('click', closeQRScanner);
+$('btnScan')?.addEventListener('click', openQRScanner);
+$('btnCloseScan')?.addEventListener('click', closeQRScanner);
 
 // ─────────────────────────────────────────────────────────────
-// How to Use Translation Tabs
+// Guide Tab Toggle
 // ─────────────────────────────────────────────────────────────
-$('tab-en').addEventListener('click', () => {
-    $('tab-en').classList.add('active');
-    $('tab-hi').classList.remove('active');
+$('tab-en')?.addEventListener('click', () => {
     $('guide-en').classList.remove('hidden');
     $('guide-hi').classList.add('hidden');
+    $('tab-en').classList.add('active');
+    $('tab-hi').classList.remove('active');
 });
-
-$('tab-hi').addEventListener('click', () => {
-    $('tab-hi').classList.add('active');
-    $('tab-en').classList.remove('active');
+$('tab-hi')?.addEventListener('click', () => {
     $('guide-hi').classList.remove('hidden');
     $('guide-en').classList.add('hidden');
+    $('tab-hi').classList.add('active');
+    $('tab-en').classList.remove('active');
 });
 
 // ─────────────────────────────────────────────────────────────
-// Startup — SW Registration + PWA Install + Trystero Preload
+// Auto-join from URL ?room=XXXXXX
 // ─────────────────────────────────────────────────────────────
-let deferredInstallPrompt = null;
-const btnInstall = $('btnInstall');
-
-// Detect if we are already running inside the installed PWA
-const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-
-if (!isStandalone) {
-    // We are in the browser
-    window.addEventListener('beforeinstallprompt', e => {
-        // Prevent the mini-infobar from appearing on mobile
-        e.preventDefault();
-        // Stash the event so it can be triggered later.
-        deferredInstallPrompt = e;
-        // Update UI notify the user they can install the PWA
-        btnInstall.classList.remove('hidden');
-        btnInstall.innerHTML = '⬇ Install App';
-    });
-
-    btnInstall.addEventListener('click', async () => {
-        if (!deferredInstallPrompt) {
-            // Fallback for "Open App" or if prompt isn't available
-            toast('Please use your browser menu to install or open the app.', 'info');
-            return;
-        }
-        deferredInstallPrompt.prompt();
-        const { outcome } = await deferredInstallPrompt.userChoice;
-        if (outcome === 'accepted') {
-            btnInstall.classList.add('hidden');
-            deferredInstallPrompt = null;
-        }
-    });
-
-    window.addEventListener('appinstalled', () => {
-        btnInstall.classList.add('hidden');
-        toast('FastDrop installed successfully!', 'success');
-    });
-
-    // Optional: Check if already installed (works in some browsers)
-    if ('getInstalledRelatedApps' in navigator) {
-        navigator.getInstalledRelatedApps().then(apps => {
-            if (apps.length > 0) {
-                // App is installed, we are in browser. Show 'Open App'
-                btnInstall.classList.remove('hidden');
-                btnInstall.innerHTML = '🚀 Open in App';
-                btnInstall.onclick = null; // Remove old listener
-                btnInstall.addEventListener('click', () => {
-                    // There's no standard programmatic way to launch a PWA from the browser.
-                    // We just instruct the user.
-                    toast('App is already installed. Open it from your home screen!', 'info');
-                });
-            }
-        });
-    }
-} else {
-    // We are running inside the installed PWA. Hide install buttons.
-    btnInstall.classList.add('hidden');
+const urlRoom = RoomManager.fromUrl();
+if (urlRoom && urlRoom.length === 6) {
+    $('roomCodeInput').value = urlRoom;
+    doJoin();
 }
-
-window.addEventListener('DOMContentLoaded', () => {
-    // Register service worker (enables PWA install + offline cache)
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./sw.js').catch(() => { });
-    }
-
-    // Preload Trystero so first click is instant (fixes INP 319ms)
-    preloadTrystero();
-
-    // Auto-join if URL has ?room=XXXXXX (QR scan lands here)
-    const urlRoom = RoomManager.fromUrl();
-    if (urlRoom && /^\d{6}$/.test(urlRoom)) {
-        $('roomCodeInput').value = urlRoom;
-        doJoin();
-    }
-});
-
