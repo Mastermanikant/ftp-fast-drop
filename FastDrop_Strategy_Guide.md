@@ -138,3 +138,30 @@ To build trust, you need a rating system right in the app. However, people are l
     * Add a 5-star rating UI component that appears dynamically when a transfer completes.
     * Write the review to your database and credit the user's account.
     * Display top reviews dynamically dynamically in the SEO section at the bottom of the page.
+
+## 9. Launch Phasing: Domain vs. Subdomain
+
+You are right: "Users care about the service, not the domain." However, domains affect Google Search Rankings (SEO).
+
+**The 3-Step Domain Plan (Recommended):**
+
+* **Phase 1 (Today - Testing):** Use the Vercel free link (`ftp-fast-drop.vercel.app`) or a free subdomain (`fastdrop.frankbase.com`). Let initial users test it. Find bugs.
+* **Phase 2 (Growth - Month 1):** Once the App is 100% bug-free (Premium features added), buy a short, brandable domain like `zerolagtransfer.com` or `frankdrop.com`. Connect it immediately so it starts "aging" on Google.
+* **Phase 3 (Monetization - Month 3):** Launch paid Google Ads targeting "AirDrop for Windows" directly to the new, clean domain.
+
+## 10. Copycats, GitHub Privacy & Play Store (The Goldmine)
+
+**1. Can someone copy this website easily?**
+
+* *Yes and No.* Because FastDrop is mostly Front-End JavaScript (WebRTC), anyone can right-click, "View Source", and copy your `index.html` and `app.js`.
+* *The Defense:* **Make your GitHub Repository PRIVATE immediately.** Never keep a money-making SaaS repository public.
+* *Obfuscation:* Before launching the final version, you can run a tool to "obfuscate" (scramble) your `app.js` code. It makes the code impossible for a human to read or steal easily.
+
+**2. Play Store / App Store Monetization (PWA Wrappers)**
+You made a brilliant point: *People on the Play Store gladly pay ₹10 - ₹50 for super-fast FTP apps.*
+
+* **The Strategy:** You do not need to rewrite FastDrop in Java or Swift. Because FastDrop is a PWA (Progressive Web App), you can use a free tool like **PWABuilder.com** to instantly wrap your Website into a `.apk` (Android) and `.ipa` (iOS) file.
+* **The Execution:**
+    1. Wrap the website into an Android App.
+    2. Publish it to the Google Play Store as a "Paid App" (e.g., ₹29 lifetime access) or "Free App with In-App Purchases."
+    3. *Why it works:* Users trust the Play Store. They don't know it's a website running underneath. The WebRTC speed will blow them away compared to native FTP apps, leading to massive 5-Star reviews.
