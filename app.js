@@ -99,8 +99,13 @@ class FileTransferEngine {
                 name: file.name, direction: 'send',
             });
 
-            // Tiny yield every 64 chunks so UI can paint
-            if (i % 64 === 0) await new Promise(r => setTimeout(r, 0));
+            // Smart buffer yield: Prevent WebRTC silent drop
+            if (i % 32 === 0) {
+                // We use setTimeout to yield to the event loop. In a robust setup,
+                // you would check `dataChannel.bufferedAmount`. Since we use Trystero's wrapper,
+                // we aggressively yield to give the browser time to empty its UDP queue.
+                await new Promise(r => setTimeout(r, 2));
+            }
         }
 
         this._sendMeta({ type: 'done', id: transferId });

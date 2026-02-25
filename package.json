@@ -1,0 +1,24 @@
+{
+  "name": "fastest-ftp-in-the-world",
+  "version": "1.0.0",
+  "description": "**The Fastest Free P2P File Transfer Web App**",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mastermanikant/ftp-fast-drop.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Mastermanikant/ftp-fast-drop/issues"
+  },
+  "homepage": "https://github.com/Mastermanikant/ftp-fast-drop#readme",
+  "devDependencies": {
+    "javascript-obfuscator": "^5.3.0"
+  }
+}
