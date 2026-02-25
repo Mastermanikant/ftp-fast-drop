@@ -88,3 +88,53 @@ How to get users for FastDrop:
 4. **Targeted Outreach:**
     * Reach out to college students (they always share heavy notes/videos).
     * Freelance video editors (who need to send massive files to clients).
+
+## 6. VPS Data Limits & Competitor Traffic (The Math)
+
+If you use a VPS (Virtual Private Server) for a STUN/TURN server (for long-distance high-speed transfers), here is the math on what you can handle.
+
+**How much data can a cheap VPS handle?**
+A typical $5/month VPS (like DigitalOcean or Hetzner) usually comes with **1 Terabyte (1000 GB) of outbound transfer** and a **1 Gigabit (1000 Mbps)** port speed.
+
+* *Local Wi-Fi Transfers:* These use **0 GB** of your VPS bandwidth. The VPS only handles the 10KB handshake. A single VPS can handle *millions* of these local connections simultaneously.
+* *Long-Distance TURN Transfers:* If users rely on your VPS to relay traffic (because a direct P2P connection failed), the data *flows through* your server.
+  * If 1,000 users each send a 1GB file via TURN, you burn your 1TB limit. After that, you pay around $0.01 per GB.
+  * *Port Speed Limit:* A 1 Gbps port can relay around 125 Megabytes per second. If 10 users are transferring long-distance at the exact same time, they get ~12.5 MB/s each.
+
+**Competitors (ShareDrop, Snapdrop):** They mostly rely on local network transfers and free public STUN servers. They try to avoid paying for TURN servers entirely. They handle huge traffic because the actual "heavy lifting" (the files) is done by the users' own devices.
+
+## 7. Domain Name Strategy
+
+Choosing the right domain is crucial for trust and SEO.
+
+* **Subdomain (fastdrop.frankbase.com):**
+  * *Pros:* Builds massive domain authority (SEO) for your parent company, Frankbase. It's free if you already own frankbase.com.
+  * *Cons:* Slightly harder to remember or market as a standalone viral product.
+* **New Domain (frankdrop.com, fastdrop.io):**
+  * *Pros:* Easier to market, feels like a dedicated app, better for short URLs/QR codes.
+  * *Cons:* Starts with zero SEO authority. You have to build backlinks from scratch.
+
+**My Recommendation:** Start with a dedicated domain if you want this to go viral.
+
+* 🔥 `frankbase.com/drop` (Best for boosting umbrella brand SEO)
+* 🔥 `zerolagtransfer.com` (Best feature-focused keyword)
+* 🔥 `gbdrop.com` or `gigadrop.com` (Short, memorable)
+* *Note on SEO:* Connecting a new domain now will not hurt you. Start with the final domain as soon as possible so it starts aging and gaining search authority.
+
+## 8. Ratings, Reviews & Incentivization (Coins System)
+
+To build trust, you need a rating system right in the app. However, people are lazy. To get them to review, you must **incentivize** them.
+
+**How to implement a "Coin" System:**
+
+1. **The Trigger:** After a successful file transfer over 50MB, show a popup: *"Rate your transfer speed and get 50 FrankCoins!"*
+2. **The Mechanics:** You will need a simple backend database (like Supabase or Firebase) to store user profiles and their coin balance.
+3. **The Value:** Coins must have worth. What do users buy with coins?
+    * *Ad-Free Experience:* Spend 100 coins for 24 hours of no ads.
+    * *Premium Speed:* Spend 500 coins to unlock the high-speed TURN server (VPS) for their next big long-distance transfer.
+    * *Custom URLs:* Spend 1000 coins to permanently get a custom room URL (`fastdrop/myroom`).
+4. **Implementation Steps:**
+    * Add a simple Google/Email login.
+    * Add a 5-star rating UI component that appears dynamically when a transfer completes.
+    * Write the review to your database and credit the user's account.
+    * Display top reviews dynamically dynamically in the SEO section at the bottom of the page.
