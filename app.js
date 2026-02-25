@@ -136,11 +136,40 @@ class FileTransferEngine {
         const remaining = (st.meta.size - st.received) / (speed || 1);
 
         this._throttledProgress(id, {
-            pct: Math.round(st.received / st.meta.size * 100),
+            pct: Math.round((st.received / st.meta.size) * 100),
             speed, sent: st.received, total: st.meta.size,
             eta: remaining, done: false,
             name: st.meta.name, direction: 'recv',
         });
+
+        // Trigger assembly ONLY when exactly 100% of chunks are received
+        if (st.received >= st.meta.size && !st.assembled) {
+            st.assembled = true;
+            this._assembleAndDownload(id, st);
+        }
+    }
+
+    _assembleAndDownload(id, st) {
+        // Reassemble — filter out any undefined slots (safety)
+        const parts = st.chunks.map(c => c ? new Uint8Array(c) : new Uint8Array(0));
+        const blob = new Blob(parts);
+        const url = URL.createObjectURL(blob);
+
+        // Generate implicit download but keep url alive for UI fallback link
+        const a = document.createElement('a');
+        a.href = url; a.download = st.meta.name;
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { document.body.removeChild(a); }, 100);
+
+        // Notify Sender that file was successfully completely downloaded
+        this._sendMeta({ type: 'downloaded', id });
+
+        this.onProgress(id, {
+            pct: 100, speed: 0, sent: st.meta.size,
+            total: st.meta.size, done: true,
+            name: st.meta.name, direction: 'recv', url: url
+        });
+        delete this._incoming[id];
     }
 
     // ── RECEIVE meta / done ────────────────────────────────────
@@ -157,29 +186,8 @@ class FileTransferEngine {
         }
 
         if (msg.type === 'done') {
-            const st = this._incoming[msg.id];
-            if (!st) return;
-
-            // Reassemble — filter out any undefined slots (safety)
-            const parts = st.chunks.map(c => c ? new Uint8Array(c) : new Uint8Array(0));
-            const blob = new Blob(parts);
-            const url = URL.createObjectURL(blob);
-
-            // Generate implicit download but keep url alive for UI
-            const a = document.createElement('a');
-            a.href = url; a.download = st.meta.name;
-            document.body.appendChild(a); a.click();
-            setTimeout(() => { document.body.removeChild(a); }, 100);
-
-            // Notify Sender that file was successfully processed
-            this._sendMeta({ type: 'downloaded', id: msg.id });
-
-            this.onProgress(msg.id, {
-                pct: 100, speed: 0, sent: st.meta.size,
-                total: st.meta.size, done: true,
-                name: st.meta.name, direction: 'recv', url: url
-            });
-            delete this._incoming[msg.id];
+            // Signal received, but we rely on exact byte count for safety now.
+            // Some poor networks drop the 'done' packet completely anyway.
         }
 
         if (msg.type === 'downloaded') {
