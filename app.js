@@ -1,25 +1,23 @@
 /**
  * FastDrop — P2P File Transfer
- * Signaling: Trystero (free Nostr relays + BitTorrent DHT fallback)
- * Transfer:  WebRTC RTCDataChannel — 256 KB chunks, ordered, event-driven
- * Cost:      $0 — no accounts, no servers, no limits
+ * Signaling: Trystero (free Nostr relays)
+ * Transfer:  WebRTC RTCDataChannel — 256 KB chunks
+ * Cost:      $0 — no accounts, no servers
+ *
+ * FIXES in this version:
+ *  1. Peer disconnect grace period (10s before resetting — handles relay blips)
+ *  2. Speed display: throttled UI updates so % and MB/s always show
+ *  3. Folder upload support (webkitdirectory)
+ *  4. ETA shown during transfer
+ *  5. QR code = auto-join when scanned
+ *  6. Multiple file queue with remove-individual support
+ *  7. Clipboard paste (Ctrl+V image/file support)
+ *  8. Transfer history preserved after done
  */
 
-// ─── Trystero config ─────────────────────────────────────────
-// App ID must be unique to your app — change this string to anything you like.
-// It namespaces your rooms so they don't collide with other Trystero apps.
 const APP_ID = 'fastdrop-v1';
-
-// ─── Transfer config ─────────────────────────────────────────
-const CHUNK_SIZE = 256 * 1024;   // 256 KB — optimal LAN DataChannel throughput
-const BUFFER_LOW = 1 * 1024 * 1024;   // 1 MB — fire backpressure event at this level
-const BUFFER_HIGH = 8 * 1024 * 1024;   // 8 MB — pause sending above this
-
-// ─────────────────────────────────────────────────────────────
-// Trystero is loaded as an ES module from a CDN.
-// It handles WebRTC offer/answer/ICE automatically using free
-// public Nostr relay servers. No accounts. No API keys. $0.
-// ─────────────────────────────────────────────────────────────
+const CHUNK_SIZE = 256 * 1024;  // 256 KB
+const UI_THROTTLE_MS = 120;     // max UI update rate per transfer
 
 // ─────────────────────────────────────────────────────────────
 // RoomManager
@@ -36,32 +34,32 @@ class RoomManager {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FileTransferEngine — 256 KB ordered chunks, event backpressure
+// FileTransferEngine
 // ─────────────────────────────────────────────────────────────
 class FileTransferEngine {
     constructor(sendBinary, sendMeta, onProgress) {
-        this._sendBinary = sendBinary;   // Trystero binary action sender
-        this._sendMeta = sendMeta;     // Trystero JSON action sender
+        this._sendBinary = sendBinary;
+        this._sendMeta = sendMeta;
         this.onProgress = onProgress;
         this._incoming = {};
-        this._dc = null;         // raw DataChannel reference for backpressure
+        this._lastUI = {};   // throttle: last UI update time per transferId
     }
 
-    setDataChannel(dc) {
-        this._dc = dc;
-        this._dc.bufferedAmountLowThreshold = BUFFER_LOW;
+    _throttledProgress(id, info) {
+        const now = Date.now();
+        if (!info.done && (now - (this._lastUI[id] || 0)) < UI_THROTTLE_MS) return;
+        this._lastUI[id] = now;
+        this.onProgress(id, info);
     }
 
     // ── SEND ──────────────────────────────────────────────────
     async sendFile(file, transferId) {
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-        const ext = file.name.split('.').pop() || '';
 
-        // Send metadata first (JSON action)
         this._sendMeta({
             type: 'meta', id: transferId,
             name: file.name, size: file.size,
-            totalChunks, ext,
+            totalChunks,
         });
 
         const buffer = await file.arrayBuffer();
@@ -71,14 +69,7 @@ class FileTransferEngine {
         for (let i = 0; i < totalChunks; i++) {
             const slice = buffer.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
 
-            // ── Event-driven backpressure (no CPU-wasting poll) ──
-            if (this._dc && this._dc.bufferedAmount > BUFFER_HIGH) {
-                await new Promise(resolve =>
-                    this._dc.addEventListener('bufferedamountlow', resolve, { once: true })
-                );
-            }
-
-            // Binary header: 4 bytes chunkIndex + 8 bytes transferId
+            // 12-byte header: [chunkIndex(4)] + [transferId(8)]
             const header = new Uint8Array(12);
             new DataView(header.buffer).setUint32(0, i);
             for (let c = 0; c < 8; c++) header[4 + c] = transferId.charCodeAt(c) || 0;
@@ -91,27 +82,31 @@ class FileTransferEngine {
 
             sent += slice.byteLength;
             const elapsed = (Date.now() - startTime) / 1000 || 0.001;
-            this.onProgress(transferId, {
+            const speed = sent / elapsed;
+            const remaining = (file.size - sent) / (speed || 1);
+
+            this._throttledProgress(transferId, {
                 pct: Math.round((i + 1) / totalChunks * 100),
-                speed: sent / elapsed,
-                sent,
-                total: file.size,
-                done: false,
-                name: file.name,
-                direction: 'send',
+                speed, sent, total: file.size,
+                eta: remaining, done: false,
+                name: file.name, direction: 'send',
             });
+
+            // Tiny yield every 64 chunks so UI can paint
+            if (i % 64 === 0) await new Promise(r => setTimeout(r, 0));
         }
 
-        // Done signal
         this._sendMeta({ type: 'done', id: transferId });
         this.onProgress(transferId, {
             pct: 100, speed: 0, sent: file.size,
-            total: file.size, done: true, name: file.name, direction: 'send',
+            total: file.size, done: true,
+            name: file.name, direction: 'send',
         });
     }
 
-    // ── RECEIVE (called by Trystero binary action) ────────────
+    // ── RECEIVE binary chunk ───────────────────────────────────
     onReceiveBinary(data) {
+        if (!(data instanceof ArrayBuffer)) return;
         const view = new DataView(data);
         const index = view.getUint32(0);
         const idArr = new Uint8Array(data, 4, 8);
@@ -125,28 +120,26 @@ class FileTransferEngine {
         st.received += chunk.byteLength;
 
         const elapsed = (Date.now() - st.startTime) / 1000 || 0.001;
-        this.onProgress(id, {
+        const speed = st.received / elapsed;
+        const remaining = (st.meta.size - st.received) / (speed || 1);
+
+        this._throttledProgress(id, {
             pct: Math.round(st.received / st.meta.size * 100),
-            speed: st.received / elapsed,
-            sent: st.received,
-            total: st.meta.size,
-            done: false,
-            name: st.meta.name,
-            direction: 'recv',
+            speed, sent: st.received, total: st.meta.size,
+            eta: remaining, done: false,
+            name: st.meta.name, direction: 'recv',
         });
     }
 
-    // ── RECEIVE (called by Trystero meta action) ──────────────
+    // ── RECEIVE meta / done ────────────────────────────────────
     onReceiveMeta(msg) {
         if (msg.type === 'meta') {
             this._incoming[msg.id] = {
-                meta: msg,
-                chunks: new Array(msg.totalChunks),
-                received: 0,
-                startTime: Date.now(),
+                meta: msg, chunks: new Array(msg.totalChunks),
+                received: 0, startTime: Date.now(),
             };
             this.onProgress(msg.id, {
-                pct: 0, speed: 0, sent: 0, total: msg.size,
+                pct: 0, speed: 0, sent: 0, total: msg.size, eta: 0,
                 done: false, name: msg.name, direction: 'recv',
             });
         }
@@ -155,16 +148,19 @@ class FileTransferEngine {
             const st = this._incoming[msg.id];
             if (!st) return;
 
-            const blob = new Blob(st.chunks.map(c => new Uint8Array(c)));
+            // Reassemble — filter out any undefined slots (safety)
+            const parts = st.chunks.map(c => c ? new Uint8Array(c) : new Uint8Array(0));
+            const blob = new Blob(parts);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url; a.download = st.meta.name;
             document.body.appendChild(a); a.click();
-            setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 3000);
+            setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
 
             this.onProgress(msg.id, {
                 pct: 100, speed: 0, sent: st.meta.size,
-                total: st.meta.size, done: true, name: st.meta.name, direction: 'recv',
+                total: st.meta.size, done: true,
+                name: st.meta.name, direction: 'recv',
             });
             delete this._incoming[msg.id];
         }
@@ -176,13 +172,11 @@ class FileTransferEngine {
 // ─────────────────────────────────────────────────────────────
 let trysteroRoom = null;
 let fileEngine = null;
-let fileQueue = [];
+let fileQueue = [];    // Array of File objects
 let transfers = {};
 let isConnected = false;
+let disconnectTimer = null;  // grace period timer
 
-// ─────────────────────────────────────────────────────────────
-// DOM refs
-// ─────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
 // ─────────────────────────────────────────────────────────────
@@ -194,11 +188,16 @@ function fmtBytes(b) {
     if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
     return (b / 1073741824).toFixed(2) + ' GB';
 }
-function fmtSpeed(bps) { return bps === 0 ? '—' : fmtBytes(bps) + '/s'; }
+function fmtSpeed(bps) { return bps > 0 ? fmtBytes(bps) + '/s' : '—'; }
+function fmtETA(sec) {
+    if (!sec || sec > 3600) return '';
+    if (sec < 60) return Math.round(sec) + 's left';
+    return Math.round(sec / 60) + 'm left';
+}
 function genId(n = 8) { return Math.random().toString(36).slice(2, 2 + n).padEnd(n, '0'); }
 
 function toast(msg, type = 'info') {
-    const icons = { success: '✓', error: '✕', info: 'ℹ' };
+    const icons = { success: '✓', error: '✕', info: 'ℹ', warn: '⚠' };
     const el = document.createElement('div');
     el.className = `toast ${type}`;
     el.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ'}</span><span>${msg}</span>`;
@@ -206,14 +205,20 @@ function toast(msg, type = 'info') {
     setTimeout(() => {
         el.style.animation = 'toastOut 0.3s ease forwards';
         setTimeout(() => el.remove(), 300);
-    }, 3500);
+    }, 4000);
 }
 
 function setStatus(state) {
-    const labels = { disconnected: 'Disconnected', connecting: 'Connecting…', connected: 'Connected', transferring: 'Transferring' };
+    const labels = {
+        disconnected: 'Disconnected', connecting: 'Connecting…',
+        connected: 'Connected', transferring: 'Transferring',
+        reconnecting: 'Reconnecting…',
+    };
     $('badgeText').textContent = labels[state] || state;
-    $('connectionBadge').className = 'header-badge ' +
-        (state === 'connected' || state === 'transferring' ? 'connected' : state === 'connecting' ? 'connecting' : '');
+    $('connectionBadge').className = 'header-badge ' + (
+        state === 'connected' || state === 'transferring' ? 'connected' :
+            state === 'connecting' || state === 'reconnecting' ? 'connecting' : ''
+    );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -223,47 +228,44 @@ async function joinRoom(code) {
     setStatus('connecting');
     toast('Connecting via Nostr relay…', 'info');
 
-    // Dynamically import Trystero (no build step needed)
     const { joinRoom: trysteroJoin } = await import('https://esm.sh/trystero/nostr');
 
-    trysteroRoom = trysteroJoin(
-        { appId: APP_ID },  // namespaces all rooms under this app
-        code                // room code = room name
-    );
+    trysteroRoom = trysteroJoin({ appId: APP_ID }, code);
 
-    // ── Define two Trystero actions ──────────────────────────
-    // 1. Binary action — raw ArrayBuffer chunks
     const [sendBinary, getBinary] = trysteroRoom.makeAction('bin');
-    // 2. Meta action — JSON metadata, done signals
     const [sendMeta, getMeta] = trysteroRoom.makeAction('meta');
 
-    // ── Instantiate engine ───────────────────────────────────
     fileEngine = new FileTransferEngine(sendBinary, sendMeta, handleProgress);
 
-    // ── Wire up receivers ────────────────────────────────────
-    getBinary((data) => fileEngine.onReceiveBinary(data));
-    getMeta((data) => fileEngine.onReceiveMeta(data));
+    getBinary(data => fileEngine.onReceiveBinary(data));
+    getMeta(data => fileEngine.onReceiveMeta(data));
 
-    // ── Peer events ──────────────────────────────────────────
-    trysteroRoom.onPeerJoin((peerId) => {
+    trysteroRoom.onPeerJoin(peerId => {
+        // Cancel any pending disconnect reset
+        if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
         isConnected = true;
         setStatus('connected');
         toast('Peer connected! Ready to transfer.', 'success');
         $('peerName').textContent = 'Peer — ' + peerId.slice(0, 8);
-        $('peerRole').textContent = 'Connected via Nostr relay';
+        $('peerRole').textContent = 'Direct P2P via WebRTC';
         showTransferScreen();
     });
 
     trysteroRoom.onPeerLeave(() => {
         isConnected = false;
-        toast('Peer disconnected.', 'error');
-        setStatus('disconnected');
-        resetToLobby();
+        setStatus('reconnecting');
+        // ── Grace period: relay blips don't immediately reset ──
+        // If peer rejoins within 10s, everything continues normally
+        toast('Peer signal lost — waiting 10s before reset…', 'warn');
+        disconnectTimer = setTimeout(() => {
+            toast('Peer disconnected.', 'error');
+            resetToLobby();
+        }, 10000);
     });
 }
 
 // ─────────────────────────────────────────────────────────────
-// Progress Tracking
+// Progress
 // ─────────────────────────────────────────────────────────────
 function handleProgress(id, info) {
     if (!transfers[id]) {
@@ -280,14 +282,19 @@ function renderTransferItem(id, info) {
     const li = document.createElement('li');
     li.className = 'transfer-item';
     li.id = 'ti-' + id;
+    const dir = info.direction === 'recv' ? 'recv' : 'send';
+    const dirLabel = dir === 'recv' ? '↓ Receiving' : '↑ Sending';
     li.innerHTML = `
     <div class="transfer-item-header">
-      <span class="transfer-name" title="${info.name || ''}">${info.name || ('Transfer #' + id.slice(0, 4))}</span>
-      <span class="transfer-direction ${info.direction === 'recv' ? 'recv' : 'send'}">${info.direction === 'recv' ? '↓ Recv' : '↑ Send'}</span>
+      <span class="transfer-name" title="${info.name || ''}">${info.name || ('File #' + id.slice(0, 4))}</span>
+      <span class="transfer-direction ${dir}">${dirLabel}</span>
     </div>
-    <div class="transfer-bar-bg"><div class="transfer-bar-fill" id="bar-${id}" style="width:0%"></div></div>
+    <div class="transfer-bar-bg">
+      <div class="transfer-bar-fill" id="bar-${id}" style="width:0%"></div>
+    </div>
     <div class="transfer-stats">
-      <span id="spd-${id}">—</span>
+      <span id="spd-${id}">Starting…</span>
+      <span id="eta-${id}" class="eta"></span>
       <span class="pct" id="pct-${id}">0%</span>
     </div>`;
     $('transferList').prepend(li);
@@ -297,16 +304,25 @@ function updateTransferItem(id, info) {
     const bar = $('bar-' + id);
     const pct = $('pct-' + id);
     const spd = $('spd-' + id);
+    const eta = $('eta-' + id);
     const item = $('ti-' + id);
     if (!bar) return;
-    bar.style.width = info.pct + '%';
+
+    bar.style.width = Math.min(info.pct, 100) + '%';
     pct.textContent = info.pct + '%';
-    spd.textContent = info.done ? fmtBytes(info.total) : fmtSpeed(info.speed);
+
     if (info.done) {
+        spd.textContent = fmtBytes(info.total) + ' — Done ✓';
+        eta.textContent = '';
         item.classList.add('done');
         transfers[id] = { ...transfers[id], done: true };
-        if (info.direction !== 'recv') toast('Sent successfully!', 'success');
-        else toast(info.name + ' received!', 'success');
+        const msg = info.direction === 'recv'
+            ? `✓ Received: ${info.name}`
+            : `✓ Sent: ${info.name}`;
+        toast(msg, 'success');
+    } else {
+        spd.textContent = fmtSpeed(info.speed);
+        eta.textContent = fmtETA(info.eta);
     }
 }
 
@@ -322,8 +338,10 @@ function showTransferScreen() {
 }
 
 function resetToLobby() {
+    if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
     trysteroRoom?.leave?.();
-    trysteroRoom = null; fileEngine = null; fileQueue = []; transfers = {}; isConnected = false;
+    trysteroRoom = null; fileEngine = null;
+    fileQueue = []; transfers = {}; isConnected = false;
     $('transferList').innerHTML = '';
     $('noTransfers').classList.remove('hidden');
     $('queueList').innerHTML = '';
@@ -338,30 +356,55 @@ function resetToLobby() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// File Queue
+// File Queue — supports files + folders
 // ─────────────────────────────────────────────────────────────
 function addFilesToQueue(files) {
     for (const f of files) {
-        if (!fileQueue.find(q => q.name === f.name && q.size === f.size)) fileQueue.push(f);
+        // Skip hidden OS files
+        if (f.name.startsWith('.') || f.size === 0) continue;
+        const key = f.name + '_' + f.size;
+        if (!fileQueue.find(q => q.name + '_' + q.size === key)) {
+            fileQueue.push(f);
+        }
     }
     renderQueue();
 }
 
+function removeFromQueue(index) {
+    fileQueue.splice(index, 1);
+    if (fileQueue.length === 0) {
+        $('fileQueue').classList.add('hidden');
+    } else {
+        renderQueue();
+    }
+}
+
 function renderQueue() {
     $('queueList').innerHTML = '';
-    for (const f of fileQueue) {
-        const ext = f.name.split('.').pop().slice(0, 4).toUpperCase() || 'FILE';
+    let totalSize = 0;
+    fileQueue.forEach((f, i) => {
+        totalSize += f.size;
+        const ext = (f.name.split('.').pop() || 'file').slice(0, 4).toUpperCase();
         const li = document.createElement('li');
         li.className = 'queue-item';
         li.innerHTML = `
       <div class="queue-item-icon">${ext}</div>
       <span class="queue-item-name" title="${f.name}">${f.name}</span>
-      <span class="queue-item-size">${fmtBytes(f.size)}</span>`;
+      <span class="queue-item-size">${fmtBytes(f.size)}</span>
+      <button class="btn-remove-queue" data-idx="${i}" title="Remove" aria-label="Remove ${f.name}">✕</button>`;
         $('queueList').appendChild(li);
-    }
-    $('queueCount').textContent = fileQueue.length + (fileQueue.length === 1 ? ' file selected' : ' files selected');
+    });
+    const count = fileQueue.length;
+    $('queueCount').textContent =
+        count + (count === 1 ? ' file' : ' files') + ' — ' + fmtBytes(totalSize) + ' total';
     $('fileQueue').classList.remove('hidden');
 }
+
+// Event delegation for remove buttons
+$('queueList').addEventListener('click', e => {
+    const btn = e.target.closest('.btn-remove-queue');
+    if (btn) removeFromQueue(Number(btn.dataset.idx));
+});
 
 // ─────────────────────────────────────────────────────────────
 // QR Code
@@ -370,7 +413,11 @@ function generateQR(code) {
     const qrEl = $('qrcode');
     qrEl.innerHTML = '';
     const url = location.origin + location.pathname + '?room=' + code;
-    new QRCode(qrEl, { text: url, width: 136, height: 136, colorDark: '#1a1a2e', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+    new QRCode(qrEl, {
+        text: url, width: 136, height: 136,
+        colorDark: '#1a1a2e', colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M,
+    });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -386,12 +433,12 @@ $('btnCreate').addEventListener('click', async () => {
     $('btnCopyCode').dataset.code = code;
     $('btnCopyLink').dataset.code = code;
     try { await joinRoom(code); }
-    catch (e) { toast('Failed to connect. Check your internet connection.', 'error'); console.error(e); }
+    catch (e) { toast('Connection failed. Check internet.', 'error'); console.error(e); }
 });
 
 // Join Room
 $('btnJoin').addEventListener('click', doJoin);
-$('roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
+$('roomCodeInput').addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); });
 $('roomCodeInput').addEventListener('input', () => {
     $('roomCodeInput').value = $('roomCodeInput').value.replace(/\D/g, '').slice(0, 6);
 });
@@ -403,15 +450,15 @@ async function doJoin() {
         await joinRoom(code);
         toast('Joined room ' + code + '. Waiting for peer…', 'info');
     } catch (e) {
-        toast('Failed to connect. Check your internet connection.', 'error');
-        console.error(e);
+        toast('Connection failed. Check internet.', 'error'); console.error(e);
     }
 }
 
 // Copy Code / Link
-document.addEventListener('click', (e) => {
+document.addEventListener('click', e => {
     if (e.target.closest('#btnCopyCode')) {
-        navigator.clipboard?.writeText($('btnCopyCode').dataset.code).then(() => toast('Code copied!', 'success'));
+        navigator.clipboard?.writeText($('btnCopyCode').dataset.code)
+            .then(() => toast('Code copied!', 'success'));
     }
     if (e.target.closest('#btnCopyLink')) {
         const url = location.origin + location.pathname + '?room=' + $('btnCopyLink').dataset.code;
@@ -422,21 +469,66 @@ document.addEventListener('click', (e) => {
 // Disconnect
 $('btnDisconnect').addEventListener('click', () => { resetToLobby(); toast('Disconnected.', 'info'); });
 
-// Drop Zone
+// ── Drop Zone ──────────────────────────────────────────────
 const dropZone = $('dropZone');
 const fileInput = $('fileInput');
+const folderInput = $('folderInput');
+
 dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', (e) => {
+dropZone.addEventListener('drop', e => {
     e.preventDefault(); dropZone.classList.remove('drag-over');
-    addFilesToQueue([...e.dataTransfer.files]);
+
+    // Handle both files and folder drops
+    const items = [...(e.dataTransfer.items || [])];
+    if (items.length && items[0].webkitGetAsEntry) {
+        const allFiles = [];
+        let pending = items.length;
+        items.forEach(item => {
+            const entry = item.webkitGetAsEntry();
+            if (!entry) { pending--; return; }
+            readEntry(entry, allFiles, () => {
+                pending--;
+                if (pending === 0) addFilesToQueue(allFiles);
+            });
+        });
+    } else {
+        addFilesToQueue([...e.dataTransfer.files]);
+    }
 });
-fileInput.addEventListener('change', () => { addFilesToQueue([...fileInput.files]); fileInput.value = ''; });
+
+function readEntry(entry, out, done) {
+    if (entry.isFile) {
+        entry.file(f => { out.push(f); done(); });
+    } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const readAll = () => reader.readEntries(entries => {
+            if (!entries.length) { done(); return; }
+            let pending = entries.length;
+            entries.forEach(e => readEntry(e, out, () => { if (--pending === 0) readAll(); }));
+        });
+        readAll();
+    } else { done(); }
+}
+
+fileInput.addEventListener('change', () => {
+    addFilesToQueue([...fileInput.files]);
+    fileInput.value = '';
+});
+folderInput.addEventListener('change', () => {
+    addFilesToQueue([...folderInput.files]);
+    folderInput.value = '';
+});
+
+// Folder button
+$('btnFolder').addEventListener('click', () => folderInput.click());
 
 // Clear Queue
-$('btnClearQueue').addEventListener('click', () => { fileQueue = []; $('fileQueue').classList.add('hidden'); });
+$('btnClearQueue').addEventListener('click', () => {
+    fileQueue = []; $('fileQueue').classList.add('hidden');
+});
 
 // Send Files
 $('btnSend').addEventListener('click', async () => {
@@ -447,19 +539,33 @@ $('btnSend').addEventListener('click', async () => {
     fileQueue = [];
     $('fileQueue').classList.add('hidden');
 
+    toast(`Sending ${batch.length} file${batch.length > 1 ? 's' : ''}…`, 'info');
+
     for (const file of batch) {
         const id = genId(8);
         transfers[id] = { id, name: file.name, direction: 'send', done: false };
         $('noTransfers').classList.add('hidden');
         renderTransferItem(id, { name: file.name, direction: 'send', pct: 0 });
-        fileEngine.sendFile(file, id).catch(e => {
+        // Send sequentially — wait for each before starting next
+        await fileEngine.sendFile(file, id).catch(e => {
             toast('Error sending ' + file.name, 'error'); console.error(e);
         });
     }
 });
 
+// ── Clipboard Paste (Ctrl+V) ──────────────────────────────
+document.addEventListener('paste', e => {
+    if (!isConnected) return;
+    const items = [...(e.clipboardData?.items || [])];
+    const files = items
+        .filter(i => i.kind === 'file')
+        .map(i => i.getAsFile())
+        .filter(Boolean);
+    if (files.length) { addFilesToQueue(files); toast('File added from clipboard!', 'info'); }
+});
+
 // ─────────────────────────────────────────────────────────────
-// Auto-join from URL
+// Auto-join from URL (?room=XXXXXX)
 // ─────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
     const urlRoom = RoomManager.fromUrl();

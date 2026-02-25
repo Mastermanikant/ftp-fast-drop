@@ -113,6 +113,7 @@
             <div class="pulse-ring"></div>
             <span>Waiting for peer…</span>
           </div>
+          <p class="qr-hint">📱 Other device: scan QR or open the copied link</p>
         </div>
         <div class="room-panel-right">
           <div id="qrcode" class="qr-container" aria-label="QR code for room"></div>
@@ -149,8 +150,7 @@
           <h2>Send Files</h2>
 
           <!-- Drop Zone -->
-          <div class="drop-zone" id="dropZone" role="button" tabindex="0"
-            aria-label="Drop files here or click to browse">
+          <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop files or folders here">
             <div class="drop-zone-inner">
               <div class="drop-icon">
                 <svg viewBox="0 0 64 64" fill="none">
@@ -166,11 +166,17 @@
                   </defs>
                 </svg>
               </div>
-              <p class="drop-text">Drop files here</p>
-              <p class="drop-sub">or click to browse</p>
+              <p class="drop-text">Drop files or folders</p>
+              <p class="drop-sub">Click to browse files &nbsp;·&nbsp; <span class="folder-hint" id="btnFolderHint">📁 or
+                  select a folder</span></p>
             </div>
             <input type="file" id="fileInput" multiple hidden aria-hidden="true" />
+            <input type="file" id="folderInput" webkitdirectory multiple hidden aria-hidden="true" />
           </div>
+          <!-- Folder Button -->
+          <button class="btn btn-outline btn-folder" id="btnFolder" type="button">
+            📁 Add Folder
+          </button>
 
           <!-- File Queue -->
           <div class="file-queue hidden" id="fileQueue">
