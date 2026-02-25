@@ -182,7 +182,6 @@ let fileEngine = null;
 let fileQueue = [];    // Array of File objects
 let transfers = {};
 let isConnected = false;
-let disconnectTimer = null;  // grace period timer
 
 const $ = id => document.getElementById(id);
 
@@ -250,8 +249,6 @@ async function joinRoom(code) {
     getMeta(data => fileEngine.onReceiveMeta(data));
 
     trysteroRoom.onPeerJoin(peerId => {
-        // Cancel any pending disconnect reset
-        if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
         isConnected = true;
         setStatus('connected');
         toast('Peer connected! Ready to transfer.', 'success');
