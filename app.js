@@ -629,32 +629,67 @@ $('btnCloseScan').addEventListener('click', closeQRScanner);
 // Startup — SW Registration + PWA Install + Trystero Preload
 // ─────────────────────────────────────────────────────────────
 let deferredInstallPrompt = null;
+const btnInstall = $('btnInstall');
 
-window.addEventListener('beforeinstallprompt', e => {
-    e.preventDefault();
-    deferredInstallPrompt = e;
-    $('btnInstall').classList.remove('hidden');
-});
+// Detect if we are already running inside the installed PWA
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
 
-$('btnInstall').addEventListener('click', async () => {
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt();
-    const { outcome } = await deferredInstallPrompt.userChoice;
-    if (outcome === 'accepted') {
-        $('btnInstall').classList.add('hidden');
-        deferredInstallPrompt = null;
+if (!isStandalone) {
+    // We are in the browser
+    window.addEventListener('beforeinstallprompt', e => {
+        // Prevent the mini-infobar from appearing on mobile
+        e.preventDefault();
+        // Stash the event so it can be triggered later.
+        deferredInstallPrompt = e;
+        // Update UI notify the user they can install the PWA
+        btnInstall.classList.remove('hidden');
+        btnInstall.innerHTML = '⬇ Install App';
+    });
+
+    btnInstall.addEventListener('click', async () => {
+        if (!deferredInstallPrompt) {
+            // Fallback for "Open App" or if prompt isn't available
+            toast('Please use your browser menu to install or open the app.', 'info');
+            return;
+        }
+        deferredInstallPrompt.prompt();
+        const { outcome } = await deferredInstallPrompt.userChoice;
+        if (outcome === 'accepted') {
+            btnInstall.classList.add('hidden');
+            deferredInstallPrompt = null;
+        }
+    });
+
+    window.addEventListener('appinstalled', () => {
+        btnInstall.classList.add('hidden');
+        toast('FastDrop installed successfully!', 'success');
+    });
+
+    // Optional: Check if already installed (works in some browsers)
+    if ('getInstalledRelatedApps' in navigator) {
+        navigator.getInstalledRelatedApps().then(apps => {
+            if (apps.length > 0) {
+                // App is installed, we are in browser. Show 'Open App'
+                btnInstall.classList.remove('hidden');
+                btnInstall.innerHTML = '🚀 Open in App';
+                btnInstall.onclick = null; // Remove old listener
+                btnInstall.addEventListener('click', () => {
+                    // There's no standard programmatic way to launch a PWA from the browser.
+                    // We just instruct the user.
+                    toast('App is already installed. Open it from your home screen!', 'info');
+                });
+            }
+        });
     }
-});
-
-window.addEventListener('appinstalled', () => {
-    $('btnInstall').classList.add('hidden');
-    toast('FastDrop installed!', 'success');
-});
+} else {
+    // We are running inside the installed PWA. Hide install buttons.
+    btnInstall.classList.add('hidden');
+}
 
 window.addEventListener('DOMContentLoaded', () => {
     // Register service worker (enables PWA install + offline cache)
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(() => { });
+        navigator.serviceWorker.register('./sw.js').catch(() => { });
     }
 
     // Preload Trystero so first click is instant (fixes INP 319ms)
