@@ -156,20 +156,31 @@ class FileTransferEngine {
             if (!st) return;
 
             // Reassemble — filter out any undefined slots (safety)
-            const parts = st.chunks.map(c => c ? new Uint8Array(c) : new Uint8Array(0));
             const blob = new Blob(parts);
             const url = URL.createObjectURL(blob);
+
+            // Generate implicit download but keep url alive for UI
             const a = document.createElement('a');
             a.href = url; a.download = st.meta.name;
             document.body.appendChild(a); a.click();
-            setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
+            setTimeout(() => { document.body.removeChild(a); }, 100);
+
+            // Notify Sender that file was successfully processed
+            this._sendMeta({ type: 'downloaded', id: msg.id });
 
             this.onProgress(msg.id, {
                 pct: 100, speed: 0, sent: st.meta.size,
                 total: st.meta.size, done: true,
-                name: st.meta.name, direction: 'recv',
+                name: st.meta.name, direction: 'recv', url: url
             });
             delete this._incoming[msg.id];
+        }
+
+        if (msg.type === 'downloaded') {
+            // Fired on the sender side when receiver finishes download
+            const spdEl = document.getElementById('spd-' + msg.id);
+            if (spdEl) spdEl.textContent = '✓ Receiver Saved';
+            toast('Peer saved file: ' + (transfers[msg.id]?.name || ''), 'success');
         }
     }
 }
@@ -314,10 +325,17 @@ function updateTransferItem(id, info) {
     pct.textContent = info.pct + '%';
 
     if (info.done) {
-        spd.textContent = fmtBytes(info.total) + ' — Done ✓';
+        spd.textContent = fmtBytes(info.total) + (info.direction === 'recv' ? ' — Saved ✓' : ' — Sent ✓');
         eta.textContent = '';
         item.classList.add('done');
         transfers[id] = { ...transfers[id], done: true };
+
+        if (info.direction === 'recv' && info.url) {
+            // Provide manual download button as fallback/permanent link
+            const titleEl = item.querySelector('.transfer-name');
+            titleEl.innerHTML = `<a href="${info.url}" download="${info.name}" style="color:var(--accent);text-decoration:underline;">${info.name} (Click to Save Again)</a>`;
+        }
+
         const msg = info.direction === 'recv'
             ? `✓ Received: ${info.name}`
             : `✓ Sent: ${info.name}`;
