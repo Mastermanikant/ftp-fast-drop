@@ -161,6 +161,7 @@ class FileTransferEngine {
             if (!st) return;
 
             // Reassemble — filter out any undefined slots (safety)
+            const parts = st.chunks.map(c => c ? new Uint8Array(c) : new Uint8Array(0));
             const blob = new Blob(parts);
             const url = URL.createObjectURL(blob);
 
