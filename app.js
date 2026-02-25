@@ -5,9 +5,9 @@
  * v4: Clean rewrite — streaming reads, chunk-count tracking, INP fixes
  */
 
-const APP_VERSION = 'v4';
+const APP_VERSION = 'v5';
 const APP_ID = 'fastdrop-v1';
-const CHUNK_SIZE = 256 * 1024;
+const CHUNK_SIZE = 16 * 1024; // 16 KB is the safest WebRTC data chunk maximum
 const UI_HZ = 100;
 
 let trysteroModule = null;
@@ -84,8 +84,9 @@ class FileTransferEngine {
                 done: false, name: file.name, direction: 'send',
             });
 
-            // Yield every 16 chunks so browser can paint
-            if (i % 16 === 0) await new Promise(r => setTimeout(r, 0));
+            // Prevent buffer overflow dropping arrays silently (Trystero abstraction)
+            // Smaller chunks means more loops, yield every 32 chunks (approx 500KB)
+            if (i % 32 === 0) await new Promise(r => setTimeout(r, 1));
         }
 
         this._sendMeta({ type: 'done', id: transferId });
