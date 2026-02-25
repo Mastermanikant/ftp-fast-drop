@@ -95,29 +95,29 @@ Using Stripe, you can geographically set prices higher for Western countries. Wh
 
 ---
 
-## 6. Should We Offer 24-Hour "Upload & Store" Functionality?
+## 6. Two Pillars: Direct Transfer vs. 24-Hour Storage
 
-Right now, FastDrop is **Synchronous** (Sender and Receiver must be online at the exact same time).
-You asked if we should let a user upload a file to the server, and the receiver downloads it within 24 hours (like WeTransfer).
+To create a clear upsell path for users, FastDrop will offer two distinct methods of file transfer. The local transfer is free, while the "store and forward" is restricted solely to the premium data tiers (Mini/Pro/Studio).
 
-### The "Store & Forward" Feature (Asynchronous Transfer)
+### Method 1: Direct Transfer (Without Data Store)
 
-Yes, you *should* absolutely offer this, but **only as a high-tier Premium feature**.
+* **Target:** People sitting in the same room, office, or live on a call.
+* **Infrastructure:** WebRTC (P2P). No data touches a server hard drive.
+* **Cost & Limit:** 100% Free. Unlimited file size.
+* **Requirement:** Both Sender and Receiver must be online simultaneously.
 
-**Why it is a Game-Changer:**
+### Method 2: Store & Forward (With 24-Hour Data Store)
 
-* **Timezones:** If a US client is sleeping, an Indian freelancer cannot use P2P. They *must* be able to upload to a server temporarily.
-* **Convenience:** People don't always want to keep their PC screen on waiting for the other person to accept the transfer.
+* **Target:** Long-distance transfers, differing timezones, client deliveries.
+* **Infrastructure:** Cloud Storage (e.g., Cloudflare R2 / AWS S3) which costs ~$0.015 per GB stored.
+* **Cost & Limit:** Premium Only. Max 24 hours of storage per file.
+* **Requirement:** Asynchronous. Sender uploads, Receiver downloads later.
 
-**The Costs & How to Handle It:**
-Unlike P2P (where we only pay for bandwidth), this feature requires **Cloud Storage (Hard Disks)**.
+#### Features Exclusive to "Store & Forward" (Premium)
 
-* Providing 24-hour storage means renting Amazon S3 or Cloudflare R2 storage bins.
-* Cloudflare R2 is the cheapest: $0.015 per GB stored.
-* If a user uploads a 10GB file and it sits there for 24 hours, it costs you almost nothing in storage, but the bandwidth to upload and download costs money.
+1. **User Dashboard:** Users can log in and see their active stored files, total sizes, how many times they've been downloaded, and the exact time remaining until auto-delete.
+2. **Shareable Custom Links:** Instead of a random 6-digit code, premium users can create memorable, permanent links like `fastdrop.com/get/WeddingPhotos`.
+3. **File & Folder Locking:** Users can lock a single file or an entire uploaded folder with a PIN/Password. The receiver must enter this PIN before the download initiates.
+4. **Auto-Delete Safety:** A server Cron Job will permanently purge all cloud files exactly 24 hours after upload. This is mandatory; otherwise, your cloud storage costs will skyrocket.
 
-**How to Implement It Safely:**
-
-1. **Never Free:** The 24-hour upload feature should NEVER be free. It should be locked behind the "Pro Drop" or "Studio Drop" plans.
-2. **Auto-Delete (Crucial):** Write a strict server-side script (a Cron Job) that automatically permanently deletes files exactly 24 hours after upload. This ensures your server hard drive never gets full and your AWS/Cloudflare bill stays near zero.
-3. **Data Caps Apply:** If a user buys the 50GB plan, uploading a 10GB file to the server and the receiver downloading it counts against their 50GB premium limit.
+By locking these high-utility features behind the data-capped plans, you create a powerful incentive for professional users (who send long-distance data) to pay, while keeping the local network product free and viral.
