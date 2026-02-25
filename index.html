@@ -29,7 +29,7 @@
   <!-- Header -->
   <header class="header">
     <div class="logo">
-      <svg class="logo-icon" viewBox="0 0 40 40" fill="none">
+      <svg class="logo-icon" viewBox="0 0 40 40" fill="none" style="pointer-events:none">
         <circle cx="20" cy="20" r="19" stroke="url(#lg1)" stroke-width="2" />
         <path d="M20 10v14M14 18l6 6 6-6M12 28h16" stroke="url(#lg2)" stroke-width="2.2" stroke-linecap="round"
           stroke-linejoin="round" />
@@ -45,6 +45,8 @@
         </defs>
       </svg>
       <span>FastDrop</span>
+      <span id="appVersion"
+        style="font-size:10px;opacity:0.45;margin-left:4px;font-weight:500;letter-spacing:0.5px">v4</span>
     </div>
     <div class="header-right">
       <button class="btn btn-install hidden" id="btnInstall" aria-label="Install App">
@@ -165,7 +167,7 @@
           <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop files or folders here">
             <div class="drop-zone-inner">
               <div class="drop-icon">
-                <svg viewBox="0 0 64 64" fill="none">
+                <svg viewBox="0 0 64 64" fill="none" style="pointer-events:none">
                   <path d="M32 8v32M20 28l12 12 12-12" stroke="url(#dg)" stroke-width="3" stroke-linecap="round"
                     stroke-linejoin="round" />
                   <path d="M8 48c0 4.4 3.6 8 8 8h32c4.4 0 8-3.6 8-8" stroke="url(#dg)" stroke-width="3"

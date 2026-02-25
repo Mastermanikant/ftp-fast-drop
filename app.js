@@ -1,12 +1,14 @@
 /**
- * FastDrop — P2P File Transfer (Clean Build)
+ * FastDrop — P2P File Transfer (v4)
  * Signaling: Trystero (Nostr relays)
  * Transfer:  WebRTC RTCDataChannel — 256 KB chunks, streamed
+ * v4: Clean rewrite — streaming reads, chunk-count tracking, INP fixes
  */
 
+const APP_VERSION = 'v4';
 const APP_ID = 'fastdrop-v1';
-const CHUNK_SIZE = 256 * 1024;  // 256 KB per chunk
-const UI_HZ = 100;              // ms between UI repaints
+const CHUNK_SIZE = 256 * 1024;
+const UI_HZ = 100;
 
 let trysteroModule = null;
 async function preloadTrystero() {
@@ -439,7 +441,8 @@ $('btnCreate').addEventListener('click', async () => {
     const code = RoomManager.generate();
     $('roomCodeDisplay').textContent = code;
     $('roomPanel').classList.remove('hidden');
-    generateQR(code);
+    // Defer QR generation so the click handler returns fast (fixes INP)
+    setTimeout(() => generateQR(code), 0);
     $('btnCopyCode').dataset.code = code;
     $('btnCopyLink').dataset.code = code;
     try { await joinRoom(code); }
