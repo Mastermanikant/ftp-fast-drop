@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FastDrop — P2P File Transfer</title>
+  <meta name="description"
+    content="Transfer files at gigabit speeds directly between devices on your network. No servers, no cloud, no limits." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Trystero is imported dynamically inside app.js via esm.sh — no install needed -->
+</head>
+
+<body>
+
+  <!-- Background orbs -->
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+  <div class="bg-orb orb-3"></div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">
+      <svg class="logo-icon" viewBox="0 0 40 40" fill="none">
+        <circle cx="20" cy="20" r="19" stroke="url(#lg1)" stroke-width="2" />
+        <path d="M20 10v14M14 18l6 6 6-6M12 28h16" stroke="url(#lg2)" stroke-width="2.2" stroke-linecap="round"
+          stroke-linejoin="round" />
+        <defs>
+          <linearGradient id="lg1" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#7C3AED" />
+            <stop offset="1" stop-color="#06B6D4" />
+          </linearGradient>
+          <linearGradient id="lg2" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#7C3AED" />
+            <stop offset="1" stop-color="#06B6D4" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <span>FastDrop</span>
+    </div>
+    <div class="header-badge" id="connectionBadge">
+      <span class="badge-dot"></span>
+      <span class="badge-text" id="badgeText">Disconnected</span>
+    </div>
+  </header>
+
+  <main class="main">
+
+    <!-- ═══════════════ SCREEN 1: Pairing ═══════════════ -->
+    <section id="screenPairing" class="screen active">
+      <div class="hero-text">
+        <h1>Transfer files at <span class="gradient-text">gigabit speed</span></h1>
+        <p>Direct device-to-device. No cloud. No limits. Works on any browser.</p>
+      </div>
+
+      <div class="cards-row">
+        <!-- Create Room -->
+        <div class="glass-card create-card" id="createCard">
+          <div class="card-icon">✦</div>
+          <h2>Create Room</h2>
+          <p>Generate a code and share it with the other device.</p>
+          <button class="btn btn-primary" id="btnCreate" aria-label="Create Room">
+            <span>New Room</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd"
+                d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                clip-rule="evenodd" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Join Room -->
+        <div class="glass-card join-card">
+          <div class="card-icon">⊕</div>
+          <h2>Join Room</h2>
+          <p>Enter the 6-digit code shown on the sender's screen.</p>
+          <div class="code-input-row">
+            <input type="text" id="roomCodeInput" class="code-input" maxlength="6" placeholder="000000"
+              pattern="[0-9]{6}" inputmode="numeric" aria-label="Room code" />
+            <button class="btn btn-secondary" id="btnJoin" aria-label="Join Room">Join</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Room Created Panel -->
+      <div class="glass-card room-panel hidden" id="roomPanel">
+        <div class="room-panel-left">
+          <p class="room-label">Your Room Code</p>
+          <div class="room-code-display" id="roomCodeDisplay">------</div>
+          <p class="room-hint">Share this code or scan the QR</p>
+          <div class="room-actions">
+            <button class="btn btn-outline" id="btnCopyCode">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16">
+                <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+              </svg>
+              Copy Code
+            </button>
+            <button class="btn btn-outline" id="btnCopyLink">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16">
+                <path fill-rule="evenodd"
+                  d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0 1 1 0 00-1.414 1.414 4 4 0 005.656 0l3-3a4 4 0 00-5.656-5.656l-1.5 1.5a1 1 0 101.414 1.414l1.5-1.5zm-5 5a2 2 0 012.828 0 1 1 0 101.414-1.414 4 4 0 00-5.656 0l-3 3a4 4 0 105.656 5.656l1.5-1.5a1 1 0 10-1.414-1.414l-1.5 1.5a2 2 0 11-2.828-2.828l3-3z"
+                  clip-rule="evenodd" />
+              </svg>
+              Copy Link
+            </button>
+          </div>
+          <div class="waiting-indicator" id="waitingIndicator">
+            <div class="pulse-ring"></div>
+            <span>Waiting for peer…</span>
+          </div>
+        </div>
+        <div class="room-panel-right">
+          <div id="qrcode" class="qr-container" aria-label="QR code for room"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ SCREEN 2: Transfer ═══════════════ -->
+    <section id="screenTransfer" class="screen hidden">
+
+      <!-- Peer Info Bar -->
+      <div class="peer-bar" id="peerBar">
+        <div class="peer-info">
+          <div class="peer-avatar" id="peerAvatar">P</div>
+          <div>
+            <div class="peer-name" id="peerName">Peer Connected</div>
+            <div class="peer-role" id="peerRole">Ready to transfer</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost" id="btnDisconnect" aria-label="Disconnect">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16">
+            <path fill-rule="evenodd"
+              d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z"
+              clip-rule="evenodd" />
+          </svg>
+          Disconnect
+        </button>
+      </div>
+
+      <div class="transfer-layout">
+
+        <!-- Send Panel -->
+        <div class="glass-card send-panel" id="sendPanel">
+          <h2>Send Files</h2>
+
+          <!-- Drop Zone -->
+          <div class="drop-zone" id="dropZone" role="button" tabindex="0"
+            aria-label="Drop files here or click to browse">
+            <div class="drop-zone-inner">
+              <div class="drop-icon">
+                <svg viewBox="0 0 64 64" fill="none">
+                  <path d="M32 8v32M20 28l12 12 12-12" stroke="url(#dg)" stroke-width="3" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <path d="M8 48c0 4.4 3.6 8 8 8h32c4.4 0 8-3.6 8-8" stroke="url(#dg)" stroke-width="3"
+                    stroke-linecap="round" />
+                  <defs>
+                    <linearGradient id="dg" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+                      <stop stop-color="#7C3AED" />
+                      <stop offset="1" stop-color="#06B6D4" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+              </div>
+              <p class="drop-text">Drop files here</p>
+              <p class="drop-sub">or click to browse</p>
+            </div>
+            <input type="file" id="fileInput" multiple hidden aria-hidden="true" />
+          </div>
+
+          <!-- File Queue -->
+          <div class="file-queue hidden" id="fileQueue">
+            <div class="queue-header">
+              <span id="queueCount">0 files selected</span>
+              <button class="btn btn-ghost btn-sm" id="btnClearQueue">Clear</button>
+            </div>
+            <ul class="queue-list" id="queueList" role="list"></ul>
+            <button class="btn btn-primary btn-full" id="btnSend" aria-label="Send all files">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="18">
+                <path
+                  d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+              </svg>
+              Send All Files
+            </button>
+          </div>
+        </div>
+
+        <!-- Progress Panel -->
+        <div class="glass-card progress-panel" id="progressPanel">
+          <h2>Transfers</h2>
+
+          <div class="no-transfers" id="noTransfers">
+            <div class="no-transfer-icon">↕</div>
+            <p>No active transfers</p>
+            <p class="sub">Files you send or receive will appear here</p>
+          </div>
+
+          <ul class="transfer-list" id="transferList" role="list"></ul>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Toast -->
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+
+</html>
