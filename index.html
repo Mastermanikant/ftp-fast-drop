@@ -17,6 +17,13 @@
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <link rel="stylesheet" href="style.css" />
   <!-- Trystero is imported dynamically inside app.js via esm.sh — no install needed -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js')
+        .then(() => console.log('✓ Service Worker registered'))
+        .catch(e => console.warn('Service Worker registration failed:', e));
+    }
+  </script>
 </head>
 
 <body>

@@ -255,7 +255,21 @@ async function joinRoom(code) {
     if (!trysteroModule) trysteroModule = await import('https://esm.sh/trystero/nostr');
     const { joinRoom: trysteroJoin } = trysteroModule;
 
-    trysteroRoom = trysteroJoin({ appId: APP_ID }, code);
+    // Configure STUN/TURN servers for NAT traversal & firewall penetration
+    const roomConfig = {
+        appId: APP_ID,
+        rtcConfig: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ]
+        }
+    };
+
+    trysteroRoom = trysteroJoin(roomConfig, code);
 
     const [sendBinary, getBinary] = trysteroRoom.makeAction('bin');
     const [sendMeta, getMeta] = trysteroRoom.makeAction('meta');
@@ -268,7 +282,8 @@ async function joinRoom(code) {
     trysteroRoom.onPeerJoin(peerId => {
         isConnected = true;
         setStatus('connected');
-        toast('Peer connected! Ready to transfer.', 'success');
+        toast('✓ Peer connected! Ready to transfer.', 'success');
+        console.log('✓ Peer joined:', peerId);
         $('peerName').textContent = 'Peer — ' + peerId.slice(0, 8);
         $('peerRole').textContent = 'Direct P2P via WebRTC';
         showTransferScreen();
@@ -277,8 +292,18 @@ async function joinRoom(code) {
     trysteroRoom.onPeerLeave(() => {
         isConnected = false;
         setStatus('reconnecting');
-        toast('Peer signal lost — waiting to reconnect…', 'warn');
+        toast('⚠ Peer disconnected — waiting to reconnect…', 'warn');
+        console.log('⚠ Peer left, reconnecting…');
     });
+
+    // Error handling for connection failures
+    if (trysteroRoom.on) {
+        trysteroRoom.on('error', (err) => {
+            console.error('❌ Connection error:', err);
+            toast('❌ Connection error. Check your internet & firewall settings.', 'error');
+            setStatus('disconnected');
+        });
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -446,8 +471,13 @@ $('btnCreate').addEventListener('click', async () => {
     setTimeout(() => generateQR(code), 0);
     $('btnCopyCode').dataset.code = code;
     $('btnCopyLink').dataset.code = code;
-    try { await joinRoom(code); }
-    catch (e) { toast('Connection failed. Check internet.', 'error'); console.error(e); }
+    try {
+        await joinRoom(code);
+        console.log('✓ Room created:', code);
+    } catch (e) {
+        console.error('❌ Create room failed:', e);
+        toast('❌ Failed to create room. Check your internet, firewall, or try again.', 'error');
+    }
 });
 
 // Join Room
@@ -462,9 +492,11 @@ async function doJoin() {
     if (code.length !== 6) { toast('Enter a valid 6-digit code.', 'error'); return; }
     try {
         await joinRoom(code);
-        toast('Joined room ' + code + '. Waiting for peer…', 'info');
+        toast('✓ Joined room. Waiting for peer to connect…', 'info');
+        console.log('✓ Joined room:', code);
     } catch (e) {
-        toast('Connection failed. Check internet.', 'error'); console.error(e);
+        console.error('❌ Join failed:', code, e);
+        toast('❌ Failed to join. Verify room code & check firewall/internet.', 'error');
     }
 }
 
