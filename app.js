@@ -243,8 +243,10 @@ class LocalRoom {
             if (e.candidate) this._signal({ type: 'ice', candidate: e.candidate });
         };
         pc.onconnectionstatechange = () => {
-            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed')
-                this._onPeerLeave?.();
+            const s = pc.connectionState;
+            console.log('WebRTC state:', s);
+            if (s === 'failed') this._onPeerLeave?.();
+            // 'disconnected' can be transient — only treat 'failed' as real disconnect
         };
 
         if (initiator) {
@@ -280,7 +282,9 @@ class LocalRoom {
                 try { handler(JSON.parse(e.data)); } catch { handler(e.data); }
             }
         };
-        ch.onclose = () => this._onPeerLeave?.();
+        // NOTE: do NOT hook ch.onclose here — a channel closing after transfer
+        // completes is normal and must NOT trigger peer disconnect.
+        // Disconnect is detected only via pc.onconnectionstatechange above.
     }
 
     _signal(msg) { this._ws.send(JSON.stringify(msg)); }
