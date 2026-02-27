@@ -1,0 +1,4 @@
+node_modules/
+*.obfuscated.js
+.DS_Store
+Thumbs.db

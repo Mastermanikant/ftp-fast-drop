@@ -7,8 +7,8 @@
 
 const APP_VERSION = 'v5';
 const APP_ID = 'fastdrop-v1';
-const CHUNK_SIZE = 16 * 1024; // 16 KB is the safest WebRTC data chunk maximum
-const UI_HZ = 100;
+const CHUNK_SIZE = 64 * 1024; // 64 KB — safe across all browsers, 4× less overhead than 16 KB
+const UI_HZ = 60;
 
 let trysteroModule = null;
 async function preloadTrystero() {
@@ -84,9 +84,9 @@ class FileTransferEngine {
                 done: false, name: file.name, direction: 'send',
             });
 
-            // Prevent buffer overflow dropping arrays silently (Trystero abstraction)
-            // Smaller chunks means more loops, yield every 32 chunks (approx 500KB)
-            if (i % 32 === 0) await new Promise(r => setTimeout(r, 1));
+            // Yield to event loop every 128 chunks (~8 MB) to prevent UI freeze without
+            // adding any artificial sleep — maximises throughput on fast networks
+            if (i % 128 === 0) await new Promise(r => setTimeout(r, 0));
         }
 
         this._sendMeta({ type: 'done', id: transferId });
@@ -193,6 +193,124 @@ class FileTransferEngine {
 }
 
 // ─────────────────────────────────────────────────────────────
+// LocalRoom — Offline/LAN WebRTC with local WebSocket signaling
+// Mirrors Trystero room API: makeAction / onPeerJoin / onPeerLeave / leave
+// ─────────────────────────────────────────────────────────────
+class LocalRoom {
+    constructor(code, wsUrl) {
+        this._code = code;
+        this._pc = null;
+        this._channels = {};           // name → RTCDataChannel
+        this._handlers = {};           // name → receive handler
+        this._onPeerJoin = null;
+        this._onPeerLeave = null;
+        this._openChannels = 0;
+        this._CHANNEL_NAMES = ['bin', 'meta'];
+
+        this._ws = new WebSocket(wsUrl);
+        this._ws.onopen = () => this._ws.send(JSON.stringify({ type: 'join', room: code }));
+        this._ws.onmessage = e => this._handleSignal(JSON.parse(e.data));
+        this._ws.onerror = () => console.error('❌ Local signaling WS error');
+    }
+
+    makeAction(name) {
+        const send = (data) => {
+            const ch = this._channels[name];
+            if (!ch || ch.readyState !== 'open') return;
+            if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+                ch.send(data);
+            } else {
+                ch.send(JSON.stringify(data));
+            }
+        };
+        const onReceive = (handler) => { this._handlers[name] = handler; };
+        return [send, onReceive];
+    }
+
+    onPeerJoin(cb) { this._onPeerJoin = cb; }
+    onPeerLeave(cb) { this._onPeerLeave = cb; }
+
+    leave() {
+        this._ws?.close();
+        this._pc?.close();
+    }
+
+    async _initPC(initiator) {
+        const pc = new RTCPeerConnection({ iceServers: [] }); // no STUN needed on LAN
+        this._pc = pc;
+
+        pc.onicecandidate = e => {
+            if (e.candidate) this._signal({ type: 'ice', candidate: e.candidate });
+        };
+        pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed')
+                this._onPeerLeave?.();
+        };
+
+        if (initiator) {
+            for (const name of this._CHANNEL_NAMES) {
+                const ch = pc.createDataChannel(name, { ordered: true });
+                ch.binaryType = 'arraybuffer';
+                this._setupChannel(ch, name);
+            }
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            this._signal({ type: 'offer', sdp: pc.localDescription });
+        } else {
+            pc.ondatachannel = e => {
+                e.channel.binaryType = 'arraybuffer';
+                this._setupChannel(e.channel, e.channel.label);
+            };
+        }
+    }
+
+    _setupChannel(ch, name) {
+        this._channels[name] = ch;
+        ch.onopen = () => {
+            this._openChannels++;
+            if (this._openChannels === this._CHANNEL_NAMES.length)
+                this._onPeerJoin?.('local-peer');
+        };
+        ch.onmessage = e => {
+            const handler = this._handlers[name];
+            if (!handler) return;
+            if (e.data instanceof ArrayBuffer) {
+                handler(e.data);
+            } else {
+                try { handler(JSON.parse(e.data)); } catch { handler(e.data); }
+            }
+        };
+        ch.onclose = () => this._onPeerLeave?.();
+    }
+
+    _signal(msg) { this._ws.send(JSON.stringify(msg)); }
+
+    async _handleSignal(msg) {
+        if (msg.type === 'peer-joined') {
+            await this._initPC(true);
+        } else if (msg.type === 'offer') {
+            await this._initPC(false);
+            await this._pc.setRemoteDescription(msg.sdp);
+            const answer = await this._pc.createAnswer();
+            await this._pc.setLocalDescription(answer);
+            this._signal({ type: 'answer', sdp: this._pc.localDescription });
+        } else if (msg.type === 'answer') {
+            await this._pc.setRemoteDescription(msg.sdp);
+        } else if (msg.type === 'ice') {
+            await this._pc.addIceCandidate(msg.candidate).catch(() => { });
+        } else if (msg.type === 'peer-left') {
+            this._onPeerLeave?.();
+        }
+    }
+}
+
+function isLocalNetwork() {
+    const h = location.hostname;
+    return h === 'localhost' || h === '127.0.0.1' ||
+        /^192\.168\.|^10\.|^172\.(1[6-9]|2\d|3[01])\./.test(h);
+}
+
+// ─────────────────────────────────────────────────────────────
 // App State
 // ─────────────────────────────────────────────────────────────
 let trysteroRoom = null;
@@ -250,32 +368,41 @@ function setStatus(state) {
 // ─────────────────────────────────────────────────────────────
 async function joinRoom(code) {
     setStatus('connecting');
-    toast('Connecting via Nostr relay…', 'info');
 
-    if (!trysteroModule) trysteroModule = await import('https://esm.sh/trystero/nostr');
-    const { joinRoom: trysteroJoin } = trysteroModule;
-
-    // Configure STUN/TURN servers for NAT traversal & firewall penetration
-    const roomConfig = {
-        appId: APP_ID,
-        rtcConfig: {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
-            ]
+    if (isLocalNetwork()) {
+        // ── LOCAL MODE: WebSocket signaling on same LAN/hotspot, no internet needed
+        toast('Connecting via local network…', 'info');
+        trysteroRoom = new LocalRoom(code, `ws://${location.host}`);
+    } else {
+        // ── ONLINE MODE: Trystero via Nostr relay
+        toast('Connecting via Nostr relay…', 'info');
+        if (!trysteroModule) trysteroModule = await import('https://esm.sh/trystero/nostr');
+        const { joinRoom: trysteroJoin } = trysteroModule;
+        trysteroRoom = trysteroJoin({
+            appId: APP_ID,
+            rtcConfig: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    { urls: 'stun:stun3.l.google.com:19302' },
+                    { urls: 'stun:stun4.l.google.com:19302' }
+                ]
+            }
+        }, code);
+        if (trysteroRoom.on) {
+            trysteroRoom.on('error', err => {
+                console.error('❌ Connection error:', err);
+                toast('❌ Connection error. Check your internet & firewall.', 'error');
+                setStatus('disconnected');
+            });
         }
-    };
-
-    trysteroRoom = trysteroJoin(roomConfig, code);
+    }
 
     const [sendBinary, getBinary] = trysteroRoom.makeAction('bin');
     const [sendMeta, getMeta] = trysteroRoom.makeAction('meta');
 
     fileEngine = new FileTransferEngine(sendBinary, sendMeta, handleProgress);
-
     getBinary(data => fileEngine.onReceiveBinary(data));
     getMeta(data => fileEngine.onReceiveMeta(data));
 
@@ -284,8 +411,8 @@ async function joinRoom(code) {
         setStatus('connected');
         toast('✓ Peer connected! Ready to transfer.', 'success');
         console.log('✓ Peer joined:', peerId);
-        $('peerName').textContent = 'Peer — ' + peerId.slice(0, 8);
-        $('peerRole').textContent = 'Direct P2P via WebRTC';
+        $('peerName').textContent = 'Peer — ' + String(peerId).slice(0, 8);
+        $('peerRole').textContent = isLocalNetwork() ? '⚡ Local Network — Max Speed' : 'Direct P2P via WebRTC';
         showTransferScreen();
     });
 
@@ -295,15 +422,6 @@ async function joinRoom(code) {
         toast('⚠ Peer disconnected — waiting to reconnect…', 'warn');
         console.log('⚠ Peer left, reconnecting…');
     });
-
-    // Error handling for connection failures
-    if (trysteroRoom.on) {
-        trysteroRoom.on('error', (err) => {
-            console.error('❌ Connection error:', err);
-            toast('❌ Connection error. Check your internet & firewall settings.', 'error');
-            setStatus('disconnected');
-        });
-    }
 }
 
 // ─────────────────────────────────────────────────────────────
